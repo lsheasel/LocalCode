@@ -2,6 +2,7 @@
   "name": "localcode",
   "version": "0.1.0",
   "description": "Futuristic AI Developer Terminal & Autonomous Coding Agent",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "localcode": "./dist/localcode.js",

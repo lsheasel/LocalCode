@@ -1,12 +1,17 @@
 # ⚡ LocalCode
 
-An AI coding agent that runs entirely in your terminal — no cloud account required. Point it at a local model (Ollama, LM Studio) or any OpenAI-compatible server and start building.
+**An AI coding agent that runs entirely in your terminal — no cloud account required.**  
+Point it at a local model (Ollama, LM Studio) or any OpenAI-compatible server and start building.
+
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)
+![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ---
 
 ## What it does
 
-LocalCode gives you an autonomous agent that can read your codebase, write and edit files, run shell commands, and commit to git — all from a keyboard-driven terminal UI. You describe the task, the agent does the work, and asks for confirmation before touching anything destructive.
+LocalCode gives you an autonomous agent that can read your codebase, write and edit files, run shell commands, and commit to git — all from a keyboard-driven terminal UI. You describe the task, the agent does the work, and asks for your confirmation before touching anything destructive.
 
 ---
 
@@ -21,12 +26,12 @@ LocalCode gives you an autonomous agent that can read your codebase, write and e
 
 ### 1. Install a local model server
 
-**Ollama** (recommended, free, runs on Linux / macOS / Windows)
+**Ollama** (recommended — free, works on Linux / macOS / Windows)
 
 ```bash
-# Install from https://ollama.com, then:
+# Install from https://ollama.com, then run:
 ollama serve
-ollama pull deepseek-coder   # or any other model
+ollama pull deepseek-coder   # or any model you prefer
 ```
 
 **LM Studio** — download the desktop app from [lmstudio.ai](https://lmstudio.ai), load a model, and click **Start Local Server**.
@@ -36,15 +41,15 @@ ollama pull deepseek-coder   # or any other model
 ### 2. Install LocalCode
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/lsheasel/LocalCode.git
 cd LocalCode
 npm install
 npm run build
 npm link          # adds 'localcode' to your PATH
 ```
 
-> **Windows:** run the commands in PowerShell or Windows Terminal.  
-> **macOS / Linux:** a regular terminal works fine.
+> **Windows:** use PowerShell or Windows Terminal.  
+> **macOS / Linux:** any terminal works.
 
 ---
 
@@ -54,9 +59,9 @@ npm link          # adds 'localcode' to your PATH
 localcode
 ```
 
-That opens the interactive TUI. Type a task and press `Enter`.
+This opens the interactive TUI. Type a task and press `Enter`.
 
-You can also run tasks directly without entering the TUI:
+You can also pass a task directly on the command line:
 
 ```bash
 localcode fix the auth bug in src/auth.ts
@@ -68,19 +73,19 @@ localcode explain the architecture of this project
 
 ## Connecting to a server
 
-Press `/connect` inside the TUI (or type `/connect` and hit Enter) to open the connection popup:
+Type `/connect` and press `Enter` to open the connection popup:
 
 1. **Choose a provider** — Ollama, LM Studio, or any OpenAI-compatible API
 2. **Enter the IP address** — use `localhost` for a server on the same machine
-3. **Enter the port** — default is `11434` for Ollama and `1234` for LM Studio
+3. **Enter the port** — `11434` for Ollama, `1234` for LM Studio
 
-The connection is saved automatically.
+The connection is saved automatically to `~/.localcode/config.json`.
 
 ---
 
 ## Switching models
 
-Type `/model` to open the model picker. LocalCode fetches the list of available models from your server and lets you search and select with the arrow keys.
+Type `/model` to open the model picker. LocalCode fetches all available models from your server. Use the arrow keys to navigate, `/` to search, and `Enter` to select.
 
 ---
 
@@ -96,7 +101,7 @@ Type `/model` to open the model picker. LocalCode fetches the list of available 
 | `Ctrl+L` | Clear the screen |
 | `Esc` | Close popup / cancel input |
 
-**Shell passthrough** — prefix any command with `$` or `!` to run it directly in your shell without the agent:
+**Shell passthrough** — prefix a command with `$` or `!` to run it directly without the agent:
 
 ```
 $ npm test
@@ -107,13 +112,13 @@ $ npm test
 
 ## Slash commands
 
-Type `/` to see all available commands. Highlights:
+Type `/` to open the command picker. All commands are searchable.
 
 | Command | What it does |
 |---|---|
 | `/connect` | Open the server connection popup |
-| `/model` | Pick a model from the server |
-| `/models` | List all available models as text |
+| `/model` | Pick a model from the server (searchable popup) |
+| `/models` | List all available models as plain text |
 | `/doctor` | Check server connectivity and current config |
 | `/config` | Show the current configuration |
 | `/config provider ollama` | Switch to Ollama |
@@ -128,7 +133,7 @@ Type `/` to see all available commands. Highlights:
 
 ## Configuration file
 
-Settings are stored in `~/.localcode/config.json` and are created automatically on first run. You can edit it by hand if needed:
+Settings live in `~/.localcode/config.json` and are created automatically on first run. You can also edit the file directly:
 
 ```json
 {
@@ -141,7 +146,7 @@ Settings are stored in `~/.localcode/config.json` and are created automatically 
 }
 ```
 
-**Providers:** `ollama` · `lmstudio`
+**Supported providers:** `ollama` · `lmstudio`
 
 ---
 
@@ -150,33 +155,46 @@ Settings are stored in `~/.localcode/config.json` and are created automatically 
 When you give it a task, the agent can:
 
 - Read and search files in your project
-- Write new files or edit existing ones (with a diff preview before applying)
-- Run shell commands (git, npm, compilers, test runners, …)
+- Write new files or edit existing ones (with a diff preview and confirmation before applying)
+- Run shell commands — git, npm, compilers, test runners, anything
 - Create git commits
 
-Dangerous operations — like `rm -rf`, `sudo`, force-push, or database drops — are blocked automatically. Write and shell operations ask for your confirmation before running.
+**Safety:** Dangerous operations (`rm -rf`, `sudo`, force-push, database drops) are blocked automatically. File writes and shell commands ask for confirmation before running.
 
 ---
 
 ## Troubleshooting
 
 **"Ollama is not reachable"**  
-Make sure Ollama is running: `ollama serve`. Then check the URL with `/doctor`.
+Make sure Ollama is running (`ollama serve`) and the URL matches. Run `/doctor` to check.
 
 **"LM Studio is not reachable"**  
-Open LM Studio, load a model, and click **Start Local Server**. The default port is `1234`.
+Open LM Studio, load a model, and click **Start Local Server**. Default port is `1234`.
 
 **"Model not found"**  
-Run `/models` to see what's available, then switch with `/model` or `/config model <name>`.
+Type `/models` to see what's loaded, then switch with `/model` or `/config model <name>`.
 
 **The TUI looks broken / garbled**  
-LocalCode needs a terminal that supports 256 colors and UTF-8. Use Windows Terminal on Windows, or any modern terminal on macOS / Linux.
+LocalCode requires a terminal with 256-color and UTF-8 support.  
+Use **Windows Terminal** on Windows, or any modern terminal on macOS / Linux (iTerm2, Ghostty, Alacritty, etc.).
 
 ---
 
-## Development
+## Contributing
 
-```bash
-npm run dev        # watch mode — rebuilds on every file change
-node dist/localcode.js   # run the built output directly
-```
+Contributions are welcome. To get started:
+
+1. Fork the repository and create a branch for your change
+2. Install dependencies: `npm install`
+3. Start watch mode: `npm run dev`
+4. Make your changes in `src/`
+5. Test with `node dist/localcode.js`
+6. Open a pull request with a clear description of what you changed and why
+
+Please keep pull requests focused — one feature or fix per PR. If you're planning something large, open an issue first to discuss the approach.
+
+---
+
+## License
+
+[MIT](./LICENSE) — free to use, modify, and distribute.
