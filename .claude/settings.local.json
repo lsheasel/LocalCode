@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm uninstall *)",
+      "PowerShell(erpcode *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\janfe\\\\Desktop\\\\Coding\\\\LocalCode\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(ConvertTo-Csv -NoTypeInformation)",
+      "Bash(Out-String)",
+      "Bash(npm run *)",
+      "Skill(update-config)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\janfe\\\\Desktop\\\\Coding\\\\LocalCode\" -Force)",
+      "Bash(Select-Object Name, Mode)",
+      "Bash(Get-ChildItem -Recurse \"C:\\\\Users\\\\janfe\\\\Desktop\\\\Coding\\\\LocalCode\\\\src\\\\renderer\\\\src\")",
+      "Bash(npx tsc *)",
+      "PowerShell(cd \"C:\\\\Users\\\\janfe\\\\Desktop\\\\Coding\\\\LocalCode\"; npx tsc --noEmit --skipLibCheck 2>&1 | Where-Object { $_ -notmatch \"tsup\" } | Select-Object -First 40)"
+    ]
+  }
+}

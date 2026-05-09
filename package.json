@@ -1,0 +1,30 @@
+{
+  "name": "localcode",
+  "version": "0.1.0",
+  "description": "Futuristic AI Developer Terminal & Autonomous Coding Agent",
+  "type": "module",
+  "bin": {
+    "localcode": "./dist/localcode.js",
+    "local": "./dist/localcode.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/localcode.js",
+    "link:dev": "npm run build && npm link"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "ink": "^4.4.1",
+    "ink-text-input": "^5.0.1",
+    "node-pty": "^1.0.0",
+    "react": "^18.2.0",
+    "strip-ansi": "^6.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.2.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.5"
+  }
+}

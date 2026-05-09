@@ -1,0 +1,44 @@
+{
+  "name": "erpcode-terminal",
+  "displayName": "ERPCode Terminal",
+  "description": "Open a terminal and run erpcode in the current workspace.",
+  "version": "0.0.1",
+  "publisher": "erpcode",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:erpcode.openTerminal",
+    "onView:erpcode.view"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "erpcode.openTerminal",
+        "title": "ERPCode: Terminal oeffnen"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "erpcode",
+          "title": "ERPCode",
+          "icon": "resources/erpcode-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "erpcode": [
+        {
+          "id": "erpcode.view",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    }
+  }
+}
