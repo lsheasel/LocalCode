@@ -16,7 +16,19 @@ export class LMStudioProvider {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: config.model,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        messages: messages.map(m => {
+          if (!m.images?.length) return { role: m.role, content: m.content }
+          return {
+            role: m.role,
+            content: [
+              { type: 'text', text: m.content },
+              ...m.images.map(img => ({
+                type: 'image_url',
+                image_url: { url: `data:image/png;base64,${img}` },
+              })),
+            ],
+          }
+        }),
         stream: true,
         temperature: config.temperature ?? 0.1,
         max_tokens: config.maxTokens ?? 8192,

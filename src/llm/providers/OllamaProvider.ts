@@ -14,7 +14,11 @@ export class OllamaProvider {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: config.model || 'deepseek-coder',
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        messages: messages.map(m => {
+          const msg: Record<string, unknown> = { role: m.role, content: m.content }
+          if (m.images?.length) msg.images = m.images
+          return msg
+        }),
         stream: true,
         options: {
           temperature: config.temperature ?? 0.1,

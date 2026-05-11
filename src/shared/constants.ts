@@ -45,35 +45,69 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
 
 ## Available Tools
 
-- **run_shell**: Execute any shell command — including file system operations like mkdir, cp, mv, touch, rename, find, cat, etc.
-  {"tool": "run_shell", "arguments": {"command": "mkdir -p src/utils"}}
-  {"tool": "run_shell", "arguments": {"command": "cp src/foo.ts src/bar.ts"}}
-  {"tool": "run_shell", "arguments": {"command": "mv old/path new/path"}}
-  {"tool": "run_shell", "arguments": {"command": "touch src/index.ts"}}
+### Shell
+- **run_shell**: Execute a shell command
+  {"tool": "run_shell", "arguments": {"command": "npm test"}}
 
+### File System
 - **read_file**: Read file contents
   {"tool": "read_file", "arguments": {"path": "src/auth.ts"}}
 
 - **write_file**: Write/overwrite a file completely
   {"tool": "write_file", "arguments": {"path": "src/auth.ts", "content": "..."}}
 
-- **edit_file**: Apply targeted edit (search and replace)
-  {"tool": "edit_file", "arguments": {"path": "src/auth.ts", "old": "old code here", "new": "new code here"}}
+- **append_file**: Append content to a file (creates if missing)
+  {"tool": "append_file", "arguments": {"path": "log.txt", "content": "new line\n"}}
+
+- **edit_file**: Targeted search-and-replace inside a file
+  {"tool": "edit_file", "arguments": {"path": "src/auth.ts", "old": "old code", "new": "new code"}}
+
+- **delete_file**: Delete a file or directory
+  {"tool": "delete_file", "arguments": {"path": "src/old.ts", "recursive": false}}
+
+- **move_file**: Move or rename a file/directory
+  {"tool": "move_file", "arguments": {"from": "src/foo.ts", "to": "src/bar.ts"}}
+
+- **copy_file**: Copy a file
+  {"tool": "copy_file", "arguments": {"from": "src/foo.ts", "to": "src/foo.backup.ts"}}
+
+- **create_dir**: Create a directory (including parents)
+  {"tool": "create_dir", "arguments": {"path": "src/utils/helpers"}}
 
 - **list_files**: List directory contents
   {"tool": "list_files", "arguments": {"path": "src", "recursive": true}}
 
-- **search_files**: Search for patterns in files
+- **find_files**: Find files by name pattern (glob-style, * and ? supported)
+  {"tool": "find_files", "arguments": {"pattern": "*.test.ts", "path": "src"}}
+
+- **search_files**: Search for a text pattern inside files
   {"tool": "search_files", "arguments": {"pattern": "authMiddleware", "path": "src"}}
 
-- **git_status**: Get git repository status
+### Git
+- **git_status**: Working tree status
   {"tool": "git_status", "arguments": {}}
 
-- **git_diff**: Get git diff
+- **git_diff**: Show changes (set staged: true for staged diff)
   {"tool": "git_diff", "arguments": {"staged": false}}
 
-- **git_commit**: Create a git commit
+- **git_log**: Recent commit history
+  {"tool": "git_log", "arguments": {"limit": 20}}
+
+- **git_commit**: Stage all and commit
   {"tool": "git_commit", "arguments": {"message": "fix: resolve auth session handling"}}
+
+### Network
+- **web_fetch**: Fetch a URL and return its content as readable text (HTML is stripped)
+  {"tool": "web_fetch", "arguments": {"url": "https://example.com", "format": "text"}}
+  Use format "json" for JSON APIs.
+
+- **http_request**: Make an HTTP request (GET/POST/PUT/DELETE/PATCH)
+  {"tool": "http_request", "arguments": {"method": "POST", "url": "http://localhost:3000/api/users", "headers": {"Authorization": "Bearer token"}, "body": {"name": "Alice"}}}
+
+### LSP / Diagnostics
+- **lsp_check**: Run the project's language checker (tsc, cargo check, go vet, pyflakes, eslint) and return diagnostics
+  {"tool": "lsp_check", "arguments": {"path": "."}}
+  Optional: pass a specific file path instead of "." to check only that file.
 
 ## Workflow
 
@@ -115,21 +149,49 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /TRUNCATE\s+TABLE/i,
 ]
 
+export const PLAN_SYSTEM_PROMPT = `You are LocalCode in PLAN MODE. Your job is to think deeply and produce a clear, structured implementation plan — do NOT call any tools or execute anything.
+
+Analyze the request and respond with a detailed plan in this format:
+
+## Goal
+One sentence describing what needs to be achieved.
+
+## Steps
+Numbered list of concrete implementation steps. For each step include:
+- What file(s) to create or modify
+- What exactly to change and why
+- Any potential pitfalls or edge cases
+
+## Files affected
+List of all files that will be changed.
+
+## Open questions
+Any ambiguities or decisions that need user input before starting.
+
+End with: DONE: <one-line summary of the plan>`
+
 export const MAX_AGENT_ITERATIONS = 30
 
 export const BUILTIN_COMMANDS = [
-  { cmd: '/connect', description: 'Connect to server (popup)' },
-  { cmd: '/model', description: 'Select model (popup)' },
-  { cmd: '/config', description: 'Show current configuration' },
-  { cmd: '/config model ', description: 'Switch model' },
-  { cmd: '/config provider ollama', description: 'Use Ollama (localhost:11434)' },
+  { cmd: '/connect',              description: 'Connect to server (popup)' },
+  { cmd: '/model',                description: 'Select model (popup)' },
+  { cmd: '/attach',               description: 'Attach file or image (@-picker)' },
+  { cmd: '/compact',              description: 'Summarize & compress conversation' },
+  { cmd: '/session',              description: 'List saved sessions' },
+  { cmd: '/session save ',        description: 'Save session as <name>' },
+  { cmd: '/session load ',        description: 'Load session <name>' },
+  { cmd: '/session delete ',      description: 'Delete session <name>' },
+  { cmd: '/config',               description: 'Show current configuration' },
+  { cmd: '/config model ',        description: 'Switch model' },
+  { cmd: '/config provider ollama',   description: 'Use Ollama (localhost:11434)' },
   { cmd: '/config provider lmstudio', description: 'Use LM Studio (localhost:1234)' },
-  { cmd: '/config url ', description: 'Set base URL' },
-  { cmd: '/help', description: 'Show help' },
-  { cmd: '/models', description: 'List available models' },
-  { cmd: '/doctor', description: 'Check system status' },
-  { cmd: '/clear', description: 'Clear screen' },
-  { cmd: '/exit', description: 'Quit' },
+  { cmd: '/config url ',          description: 'Set base URL' },
+  { cmd: '/help',                 description: 'Show help' },
+  { cmd: '/lsp',                  description: 'Run diagnostics (tsc/cargo/pylint/eslint)' },
+  { cmd: '/models',               description: 'List available models' },
+  { cmd: '/doctor',               description: 'Check system status' },
+  { cmd: '/clear',                description: 'Clear screen' },
+  { cmd: '/exit',                 description: 'Quit' },
 ]
 
 export const COMMAND_SUGGESTIONS = [

@@ -8,6 +8,7 @@ interface Props {
   cwd: string
   agentStatus: 'idle' | 'running' | 'thinking' | 'error'
   tokenCount: number
+  mode?: 'build' | 'plan'
 }
 
 const HOME = process.env.HOME || process.env.USERPROFILE || ''
@@ -20,14 +21,14 @@ function getGitBranch(cwd: string): string {
   } catch { return '' }
 }
 
-const MODE_COLOR: Record<string, string> = {
-  idle: '#1D4ED8', running: '#1D4ED8', thinking: '#92400E', error: '#7F1D1D',
+const AGENT_COLOR: Record<string, string> = {
+  idle: '', running: '#1D4ED8', thinking: '#92400E', error: '#7F1D1D',
 }
-const MODE_LABEL: Record<string, string> = {
-  idle: 'BUILD MODE', running: 'RUNNING', thinking: 'THINKING', error: 'ERROR',
+const AGENT_LABEL: Record<string, string> = {
+  idle: '', running: 'RUNNING', thinking: 'THINKING', error: 'ERROR',
 }
 
-export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCount }) => {
+export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCount, mode = 'build' }) => {
   const branchRef = useRef('')
   const lastCwdRef = useRef('')
   if (lastCwdRef.current !== cwd) {
@@ -49,10 +50,16 @@ export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCoun
         {tokenCount > 0 && <Text color="#374151">  ~{tokenCount}t</Text>}
       </Box>
 
-      {/* Right: tab hint + mode badge */}
+      {/* Right: agent status + mode badge */}
       <Box>
-        <Text color="#374151">tab  </Text>
-        <Text backgroundColor={MODE_COLOR[agentStatus]} color="#BFDBFE"> {MODE_LABEL[agentStatus]} </Text>
+        {AGENT_LABEL[agentStatus] && (
+          <Text backgroundColor={AGENT_COLOR[agentStatus]} color="#BFDBFE"> {AGENT_LABEL[agentStatus]} </Text>
+        )}
+        <Text color="#374151">  tab  </Text>
+        <Text
+          backgroundColor={mode === 'plan' ? '#166534' : '#1D4ED8'}
+          color={mode === 'plan' ? '#86EFAC' : '#BFDBFE'}
+        > {mode === 'plan' ? 'PLAN MODE' : 'BUILD MODE'} </Text>
       </Box>
     </Box>
   )

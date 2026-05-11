@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Box, Text, useApp, useInput } from 'ink'
 import TextInput from 'ink-text-input'
+import { readFile, readdir } from 'fs/promises'
+import { existsSync } from 'fs'
+import { resolve, extname, basename, join } from 'path'
 import { Splash } from './components/Splash'
 import { StatusBar } from './components/StatusBar'
 import { ThinkingDots } from './components/ThinkingDots'
@@ -8,12 +11,53 @@ import { DiffView } from './components/DiffView'
 import { MarkdownText } from './components/MarkdownText'
 import { ConnectPopup } from './components/ConnectPopup'
 import { ModelPicker } from './components/ModelPicker'
+import { FilePicker } from './components/FilePicker'
 import { AgentRuntime, DiffPreview } from './agent/AgentRuntime'
 import { ConfigManager } from './config/ConfigManager'
 import { PtyManager } from './pty/PtyManager'
 import { LLMRouter } from './llm/LLMRouter'
-import { AgentMessage, ToolCall, ToolResult } from './shared/types'
+import { lspCheck } from './lsp/LspRunner'
+import { AgentMessage, ToolCall, ToolResult, Attachment } from './shared/types'
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from './shared/constants'
+
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'])
+const SKIP_DIRS  = new Set(['node_modules', '.git', 'dist', '__pycache__', '.next', 'build', 'target'])
+
+async function loadAttachment(filePath: string, cwd: string): Promise<Attachment | null> {
+  const resolved = resolve(cwd, filePath)
+  if (!existsSync(resolved)) return null
+  const name = basename(resolved)
+  const ext  = extname(resolved).toLowerCase()
+  if (IMAGE_EXTS.has(ext)) {
+    const buf  = await readFile(resolved)
+    const mime = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    return { path: resolved, name, type: 'image', data: buf.toString('base64'), mimeType: mime }
+  }
+  const data = await readFile(resolved, 'utf-8').catch(() => null)
+  if (data === null) return null
+  return { path: resolved, name, type: 'file', data }
+}
+
+async function listCwdFiles(cwd: string, maxDepth = 2): Promise<string[]> {
+  const results: string[] = []
+  async function walk(dir: string, rel: string, depth: number) {
+    if (depth > maxDepth || results.length > 300) return
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (SKIP_DIRS.has(e.name)) continue
+      const relPath = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        results.push(relPath + '/')
+        await walk(join(dir, e.name), relPath, depth + 1)
+      } else {
+        results.push(relPath)
+      }
+    }
+  }
+  await walk(cwd, '', 0)
+  return results
+}
 
 let _id = 0
 const nextId = () => String(++_id)
@@ -23,7 +67,7 @@ interface ConfirmRequest { toolCall: ToolCall; reason: string; diffPreview?: Dif
 interface AppProps { initialCommand?: string; cwd: string }
 
 // ── Turn grouping ─────────────────────────────────────────────────────────────
-type Turn = { type: 'user'; content: string } | { type: 'agent'; messages: AgentMessage[] }
+type Turn = { type: 'user'; content: string; timestamp: number } | { type: 'agent'; messages: AgentMessage[] }
 
 function groupIntoTurns(messages: AgentMessage[]): Turn[] {
   const turns: Turn[] = []
@@ -31,13 +75,12 @@ function groupIntoTurns(messages: AgentMessage[]): Turn[] {
 
   const flush = () => {
     if (agentMsgs.length > 0) { turns.push({ type: 'agent', messages: agentMsgs }); agentMsgs = [] }
-
   }
 
   for (const msg of messages) {
     if (msg.type === 'text' && msg.content.startsWith('> ')) {
       flush()
-      turns.push({ type: 'user', content: msg.content.slice(2) })
+      turns.push({ type: 'user', content: msg.content.slice(2), timestamp: msg.timestamp })
     } else {
       agentMsgs.push(msg)
     }
@@ -52,7 +95,7 @@ function countLines(text: string, width: number): number {
 }
 
 function estimateTurnLines(turn: Turn, innerWidth: number): number {
-  if (turn.type === 'user') return 2  // row + spacing
+  if (turn.type === 'user') return 4  // box border + content + timestamp + margin
 
   let lines = 0
   for (const msg of turn.messages) {
@@ -86,6 +129,12 @@ function getVisibleTurns(
   for (let i = endIdx - 1; i >= 0; i--) {
     const h = estimateTurnLines(turns[i], innerWidth)
     if (used + h > availRows) {
+      // Always show at least the most recent turn — even if it's taller than
+      // the available space (Ink will render it and scroll the terminal buffer).
+      if (result.length === 0) {
+        result.unshift(turns[i])
+        return { visible: result, hiddenAbove: i, hiddenBelow }
+      }
       return { visible: result, hiddenAbove: i + 1, hiddenBelow }
     }
     result.unshift(turns[i])
@@ -94,11 +143,20 @@ function getVisibleTurns(
   return { visible: result, hiddenAbove: 0, hiddenBelow }
 }
 
+function fmtTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
 // ── User message block ────────────────────────────────────────────────────────
-const UserBlock: React.FC<{ content: string }> = ({ content }) => (
-  <Box marginBottom={1}>
-    <Text color="#3B82F6">  │ </Text>
-    <Text color="#E5E7EB">{content}</Text>
+const UserBlock: React.FC<{ content: string; timestamp: number }> = ({ content, timestamp }) => (
+  <Box flexDirection="column" marginBottom={1} marginX={1} borderStyle="single" borderColor="#1D4ED8">
+    <Box paddingX={1}>
+      <Text color="#3B82F6" bold># </Text>
+      <Text color="#E5E7EB" bold>{content}</Text>
+    </Box>
+    <Box paddingX={1}>
+      <Text color="#374151">{fmtTime(timestamp)}</Text>
+    </Box>
   </Box>
 )
 
@@ -158,45 +216,52 @@ const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
       const a = msg.toolCall.arguments
       const label = (() => {
         switch (msg.toolCall.tool) {
-          case 'run_shell':    return `Shell "${String(a.command || '').slice(0, 55)}"`
-          case 'read_file':    return `Read ${a.path}`
-          case 'write_file':   return `Write ${a.path}`
-          case 'edit_file':    return null  // shown via DiffView in AgentBlock
-          case 'list_files':   return `List "${a.path || '.'}"`
-          case 'search_files': return `Search "${a.pattern}"`
-          case 'git_status':   return 'git status'
-          case 'git_diff':     return 'git diff'
-          case 'git_commit':   return `git commit "${String(a.message || '').slice(0, 40)}"`
-          default:             return msg.toolCall.tool
+          case 'run_shell':     return `$ ${String(a.command || '').slice(0, 60)}`
+          case 'read_file':     return `Read  ${a.path}`
+          case 'write_file':    return `Write ${a.path}`
+          case 'append_file':   return `Append ${a.path}`
+          case 'edit_file':     return null
+          case 'delete_file':   return `Delete ${a.path}`
+          case 'move_file':     return `Move ${a.from} → ${a.to}`
+          case 'copy_file':     return `Copy ${a.from} → ${a.to}`
+          case 'create_dir':    return `mkdir ${a.path}`
+          case 'list_files':    return `ls ${a.path || '.'}`
+          case 'find_files':    return `find ${a.pattern}`
+          case 'search_files':  return `grep "${a.pattern}"`
+          case 'git_status':    return 'git status'
+          case 'git_diff':      return 'git diff'
+          case 'git_log':       return 'git log'
+          case 'git_commit':    return `git commit  "${String(a.message || '').slice(0, 40)}"`
+          case 'web_fetch':     return `fetch ${String(a.url || '').slice(0, 55)}`
+          case 'http_request':  return `${a.method || 'GET'}  ${String(a.url || '').slice(0, 50)}`
+          case 'lsp_check':     return `lsp check  ${String(a.path || '.')}`
+          default:              return msg.toolCall.tool
         }
       })()
       if (!label) return null
       return (
-        <Box>
-          <Text color="#374151">  * </Text>
-          <Text color="#4B5563">{label}</Text>
-          <Text color="#374151"> ⟳</Text>
+        <Box paddingLeft={1}>
+          <Text color="#4B5563">  </Text>
+          <Text color="#6B7280">{label}</Text>
         </Box>
       )
     }
     case 'tool_result': {
       if (!msg.toolCall) return null
-      if (msg.toolCall.tool === 'edit_file') return null  // rendered as DiffView
+      if (msg.toolCall.tool === 'edit_file') return null
       if (!msg.toolResult?.success) {
         return (
-          <Box>
-            <Text color="#EF4444">  ✗ </Text>
-            <Text color="#EF4444">{(msg.toolResult?.error || '').slice(0, 70)}</Text>
+          <Box paddingLeft={1}>
+            <Text color="#EF4444">  ✗ {(msg.toolResult?.error || '').slice(0, 80)}</Text>
           </Box>
         )
       }
       const lines = (msg.toolResult.output || '').split('\n').filter(Boolean)
-      const summary = lines.length > 1 ? `${lines.length} lines` : (lines[0] || '').slice(0, 45)
-      const isFile = new Set(['read_file', 'write_file']).has(msg.toolCall.tool)
+      const summary = lines.length > 1 ? `${lines.length} lines` : (lines[0] || '').slice(0, 50)
       return (
-        <Box>
-          <Text color="#6B7280">  {isFile ? '→' : '*'} </Text>
-          <Text color="#6B7280">{summary}</Text>
+        <Box paddingLeft={1}>
+          <Text color="#374151">  </Text>
+          <Text color="#4B5563">{summary}</Text>
         </Box>
       )
     }
@@ -204,9 +269,10 @@ const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
       return <Text color="#EF4444" wrap="wrap">  ✗ {msg.content}</Text>
     case 'done': {
       let clean = msg.content
-        .replace(/```json[\s\S]*?```/gi, '')              // JSON Code-Blöcke weg
-        .replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?\}/g, '')   // nackte JSON Tool-Calls weg
-        .replace(/^DONE:\s*/i, '')
+        .replace(/```json[\s\S]*?```/gi, '')
+        .replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?\}/g, '')
+        .replace(/\s*DONE:\s*<[^>]*>/gi, '')     // strip " DONE: <...>" completely
+        .replace(/\s*DONE:\s*.*/gi, '')          // strip " DONE: ..." and everything after
         .trim()
       return clean ? <MarkdownText content={clean} /> : null
     }
@@ -233,7 +299,9 @@ const AgentBlock: React.FC<{ messages: AgentMessage[]; model: string }> = ({ mes
   }
   flushBuf()
 
-  // Check if this block has any real visible content (not just empty dones)
+  const doneMsg = messages.find(m => m.type === 'done')
+  const ts = doneMsg?.timestamp ?? messages[messages.length - 1]?.timestamp
+
   const hasContent = messages.some(m =>
     (m.type === 'text' && m.content && !m.content.startsWith('> ')) ||
     m.type === 'error' ||
@@ -264,10 +332,11 @@ const AgentBlock: React.FC<{ messages: AgentMessage[]; model: string }> = ({ mes
             <Text color="#3B82F6">  │ </Text>
             <Box flexDirection="column" flexGrow={1}>
               {sec.msgs.map(msg => <MsgRow key={msg.id} msg={msg} />)}
-              {isLast && hasContent && (
+              {isLast && hasContent && ts && (
                 <Box marginTop={0}>
-                  <Text color="#1D4ED8">■ </Text>
-                  <Text color="#4B5563">Build · {model}</Text>
+                  <Text color="#374151">{model}</Text>
+                  <Text color="#1D4ED8">  </Text>
+                  <Text color="#374151">({fmtTime(ts)})</Text>
                 </Box>
               )}
             </Box>
@@ -327,12 +396,21 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const [modelPicker, setModelPicker]     = useState(false)
   const [modelList, setModelList]         = useState<string[]>([])
   const [modelLoading, setModelLoading]   = useState(false)
+  const [filePicker, setFilePicker]       = useState(false)
+  const [fileList, setFileList]           = useState<string[]>([])
+  const [attachments, setAttachments]     = useState<Attachment[]>([])
+  const [mode, setMode]                   = useState<'build' | 'plan'>('build')
 
   const agentRef = useRef<AgentRuntime | null>(null)
   const ptyRef   = useRef<PtyManager | null>(null)
 
   const [termRows, setTermRows] = useState(process.stdout.rows || 24)
   const [termCols, setTermCols] = useState(process.stdout.columns || 80)
+
+  // Stable ref that holds the latest state values — lets handleSubmit (useCallback)
+  // always read fresh values without changing its identity every render.
+  const s = useRef({ agentStatus, isRunning: false, attachments, mode, pickerIdx, messages })
+  s.current = { agentStatus, isRunning: agentStatus === 'thinking' || agentStatus === 'running', attachments, mode, pickerIdx, messages }
 
   const showSplash = messages.length === 0 && agentStatus === 'idle' && !confirm
 
@@ -352,22 +430,18 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     return () => { process.stdout.off('resize', onResize) }
   }, [])
 
-  // Mouse wheel scroll support
+  // Mouse wheel scroll — raw stdin listener (fires before readline processes the bytes)
   useEffect(() => {
-    process.stdout.write('\x1b[?1000h\x1b[?1006h')  // enable SGR mouse tracking
     const onData = (data: Buffer) => {
       const str = data.toString()
       const m = str.match(/\x1b\[<(\d+);\d+;\d+[Mm]/)
       if (!m) return
       const btn = parseInt(m[1])
-      if (btn === 64) setScrollOffset(o => o + 3)          // scroll up → older msgs
-      if (btn === 65) setScrollOffset(o => Math.max(0, o - 3))  // scroll down → newer msgs
+      if (btn === 64) setScrollOffset(o => o + 3)
+      if (btn === 65) setScrollOffset(o => Math.max(0, o - 3))
     }
     process.stdin.on('data', onData)
-    return () => {
-      process.stdout.write('\x1b[?1000l\x1b[?1006l')  // disable mouse tracking
-      process.stdin.off('data', onData)
-    }
+    return () => { process.stdin.off('data', onData) }
   }, [])
 
   useEffect(() => {
@@ -388,24 +462,38 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   }, [])
 
   const handleInputChange = useCallback((v: string) => {
-    setInputValue(v); setHistIndex(-1); setPickerIdx(0)
-  }, [])
+    // Drag-and-drop detection: terminals paste the file path when a file is dropped.
+    // Strip surrounding quotes that some terminals add (Windows Terminal, PowerShell).
+    const trimmed = v.trim().replace(/^["']|["']$/g, '')
+    const isWindowsPath = /^[A-Za-z]:[\\\/].{2,}/.test(trimmed)
+    const isUnixPath    = /^\/[^\s\/]+\/[^\s]*/.test(trimmed)
 
-  const handleSubmit = useCallback(async (rawInput: string) => {
-    // Wenn Picker offen ist und Enter gedrückt → ausgewählten Befehl nehmen
-    const slashMatches = (rawInput.startsWith('/') && agentStatus === 'idle')
-      ? BUILTIN_COMMANDS.filter(c => c.cmd.toLowerCase().startsWith(rawInput.toLowerCase())).slice(0, 7)
-      : []
-    if (slashMatches.length > 0) {
-      const sel = slashMatches[pickerIdx] ?? slashMatches[0]
-      if (sel.cmd.endsWith(' ')) {
-        setInputValue(sel.cmd); setPickerIdx(0); return  // Braucht noch Argument
-      }
-      rawInput = sel.cmd.trim()
+    if (isWindowsPath || isUnixPath) {
+      // Clear input immediately so the raw path doesn't flash on screen
+      setInputValue('')
+      setHistIndex(-1)
+      setPickerIdx(0)
+      loadAttachment(trimmed, cwd).then(att => {
+        if (att) {
+          setAttachments(prev => [...prev, att])
+        } else {
+          // Not a readable file — restore the typed value so user can edit it
+          setInputValue(v)
+        }
+      })
+      return
     }
 
-    const input = rawInput
-    if (!input.trim()) return
+    setInputValue(v); setHistIndex(-1); setPickerIdx(0)
+  }, [cwd])
+
+  const handleSubmit = useCallback(async (rawInput: string) => {
+    // Always read fresh state from the ref — the useCallback dep array is intentionally
+    // minimal so the function identity stays stable across renders.
+    const { agentStatus, isRunning, attachments, mode, messages } = s.current
+
+    const input = rawInput.trim()
+    if (!input) return
     setInputValue(''); setHistIndex(-1); setPickerIdx(0)
 
     // ── /config slash command ──────────────────────────────────────────────────
@@ -467,12 +555,101 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       cm.addHistory(input); setHistory(cm.getHistory()); return
     }
 
-    // ── /help  /clear  /exit slash aliases ────────────────────────────────────
-    if (input === '/help')   { return handleSubmit('help') }
-    if (input === '/clear')  { return handleSubmit('clear') }
-    if (input === '/exit')   { return handleSubmit('exit') }
-    if (input === '/models') { return handleSubmit('models') }
-    if (input === '/doctor') { return handleSubmit('doctor') }
+    // ── exit / clear (also without slash) ────────────────────────────────────
+    if (input === '/exit' || input === 'exit' || input === 'quit') { exit(); return }
+    if (input === '/clear' || input === 'clear') { setMessages([]); return }
+
+    // ── /lsp ──────────────────────────────────────────────────────────────────
+    if (input === '/lsp' || input.startsWith('/lsp ')) {
+      const targetArg = input.slice(4).trim() || '.'
+      setAgentStatus('thinking')
+      setCurrentTokens('')
+      const { diagnostics, tool, error } = await lspCheck(cwd, targetArg === '.' ? undefined : targetArg)
+      setAgentStatus('idle')
+      setCurrentTokens('')
+      if (error && diagnostics.length === 0) {
+        addMsg({ type: 'error', content: error })
+      } else if (diagnostics.length === 0) {
+        addMsg({ type: 'command', commandTitle: `lsp (${tool})`, content: '  ✓ No issues found' })
+      } else {
+        const errors   = diagnostics.filter(d => d.severity === 'error').length
+        const warnings = diagnostics.filter(d => d.severity === 'warning').length
+        const lines = [
+          `  ${tool}: ${errors} error${errors !== 1 ? 's' : ''}, ${warnings} warning${warnings !== 1 ? 's' : ''}`,
+          '',
+          ...diagnostics.slice(0, 40).map(d =>
+            `  ${d.file}:${d.line}:${d.col}  ${d.severity}  ${d.message}${d.code ? `  [${d.code}]` : ''}`
+          ),
+          ...(diagnostics.length > 40 ? [`  … and ${diagnostics.length - 40} more`] : []),
+        ]
+        addMsg({ type: 'command', commandTitle: `lsp (${tool})`, content: lines.join('\n') })
+      }
+      cm.addHistory(input); setHistory(cm.getHistory()); return
+    }
+
+    // ── /attach ───────────────────────────────────────────────────────────────
+    if (input === '/attach') {
+      setFilePicker(true);
+      (async () => { setFileList(await listCwdFiles(cwd)) })()
+      return
+    }
+
+    // ── /compact ──────────────────────────────────────────────────────────────
+    if (input === '/compact') {
+      if (messages.length === 0) { addMsg({ type: 'error', content: 'Nothing to compact.' }); return }
+      setAgentStatus('thinking')
+      setCurrentTokens('')
+      const summary = messages.map(m => {
+        if (m.type === 'text' && m.content.startsWith('> ')) return `User: ${m.content.slice(2)}`
+        if (m.type === 'done') return `Assistant: ${m.content.replace(/^DONE:\s*/i, '').trim()}`
+        if (m.type === 'tool_call' && m.toolCall) return `  [${m.toolCall.tool}]`
+        return null
+      }).filter(Boolean).join('\n')
+      const summaryMsgs = [
+        { role: 'system' as const, content: 'You are a helpful assistant. Summarize the following conversation concisely in bullet points, preserving key decisions and results.' },
+        { role: 'user' as const, content: summary },
+      ]
+      let compacted = ''
+      try {
+        await LLMRouter.stream(summaryMsgs, cm.get().llm, t => { compacted += t; setCurrentTokens(compacted) })
+      } catch {}
+      setCurrentTokens('')
+      setAgentStatus('idle')
+      setMessages([])
+      addMsg({ type: 'done', content: `[Compacted]\n${compacted}` })
+      return
+    }
+
+    // ── /session ──────────────────────────────────────────────────────────────
+    if (input.startsWith('/session')) {
+      const rest = input.slice(8).trim()
+      const [sub, ...rest2] = rest.split(/\s+/)
+      const name = rest2.join(' ').trim() || sub
+
+      if (!sub || sub === 'list') {
+        const sessions = cm.listSessions()
+        addMsg({ type: 'command', commandTitle: 'sessions', content: sessions.length
+          ? sessions.map(s => `  • ${s}`).join('\n')
+          : '  No sessions saved yet. Use /session save <name>' })
+      } else if (sub === 'save') {
+        if (!name || name === 'save') { addMsg({ type: 'error', content: 'Usage: /session save <name>' }); return }
+        cm.saveSession(name, messages)
+        addMsg({ type: 'done', content: `Session "${name}" saved  (${messages.length} messages)` })
+      } else if (sub === 'load') {
+        if (!name || name === 'load') { addMsg({ type: 'error', content: 'Usage: /session load <name>' }); return }
+        const loaded = cm.loadSession(name)
+        if (!loaded) { addMsg({ type: 'error', content: `Session "${name}" not found.` }); return }
+        setMessages(loaded)
+        addMsg({ type: 'done', content: `Session "${name}" loaded  (${loaded.length} messages)` })
+      } else if (sub === 'delete') {
+        if (!name || name === 'delete') { addMsg({ type: 'error', content: 'Usage: /session delete <name>' }); return }
+        cm.deleteSession(name)
+        addMsg({ type: 'done', content: `Session "${name}" deleted` })
+      } else {
+        addMsg({ type: 'error', content: 'Usage: /session [list|save <name>|load <name>|delete <name>]' })
+      }
+      cm.addHistory(input); setHistory(cm.getHistory()); return
+    }
 
     // ── /connect ──────────────────────────────────────────────────────────────
     if (input === '/connect') {
@@ -504,6 +681,17 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       case 'clear': setMessages([]); return
       case 'help': case '/help':
         addMsg({ type: 'command', commandTitle: 'help', content: [
+          '**Attachments**',
+          '  /attach                        Attach file or image (@-picker)',
+          '  @path/to/file                  Include file in message (type in input)',
+          '',
+          '**Session**',
+          '  /session                       List saved sessions',
+          '  /session save <name>           Save conversation',
+          '  /session load <name>           Load conversation',
+          '  /session delete <name>         Delete session',
+          '  /compact                       Summarize & compress conversation',
+          '',
           '**Connection**',
           '  /connect                       Connect to server (popup)',
           '  /model                         Select model (popup)',
@@ -517,6 +705,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           '  /config temperature <val>      Set temperature (0.0–1.0)',
           '',
           '**System**',
+          '  /lsp                           Run diagnostics (tsc/cargo/go vet/pyflakes/eslint)',
           '  /models                        List available models',
           '  /doctor                        Check connection & status',
           '  /clear                         Clear screen',
@@ -565,10 +754,48 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           break
         }
 
+        // Mid-task injection: if agent is already running, inject the message
+        if (isRunning && agentRef.current) {
+          agentRef.current.inject(input)
+          addMsg({ type: 'text', content: `> [btw] ${input}` })
+          break
+        }
+
+        // Safety: catch local file paths that slipped through drag-and-drop detection
+        // (timing edge cases, unusual terminal quoting, etc.)
+        const strippedForPath = input.trim().replace(/^["']|["']$/g, '')
+        const isLocalPath = /^[A-Za-z]:[\\\/].{2,}/.test(strippedForPath) || /^\/[^\s]{2,}/.test(strippedForPath)
+        if (isLocalPath) {
+          const att = await loadAttachment(strippedForPath, cwd)
+          if (att) {
+            setAttachments(prev => [...prev, att])
+            return
+          }
+        }
+
+        // Parse @mentions from the input text
+        const atPattern = /@([^\s]+)/g
+        const pendingAtts: Promise<Attachment | null>[] = []
+        let cleanInput = input
+        let m
+        while ((m = atPattern.exec(input)) !== null) {
+          pendingAtts.push(loadAttachment(m[1], cwd))
+          cleanInput = cleanInput.replace(m[0], `[${m[1]}]`)
+        }
+        const resolved = await Promise.all(pendingAtts)
+        const mentionAtts = resolved.filter((a): a is Attachment => a !== null)
+        const allAtts = [...attachments, ...mentionAtts]  // attachments from ref — always fresh
+
         setAgentStatus('thinking')
         setCurrentTokens('')
         setTokenCount(0)
-        addMsg({ type: 'text', content: `> ${input}` })
+
+        // Show user message with attachment indicators
+        const attLabel = allAtts.length
+          ? `  [${allAtts.map(a => a.name).join(', ')}]`
+          : ''
+        addMsg({ type: 'text', content: `> ${cleanInput}${attLabel}` })
+        setAttachments([])
 
         const agent = new AgentRuntime()
         agentRef.current = agent
@@ -591,19 +818,22 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         agent.on('confirm_required', ({ toolCall, reason, diffPreview }: { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview }) => {
           setConfirm({ toolCall, reason, diffPreview })
         })
+        agent.on('injection', ({ message }: { message: string }) => {
+          // Already shown in the UI when inject() was called; just acknowledge
+        })
         agent.on('error', (msg: string) => { setAgentStatus('error'); addMsg({ type: 'error', content: msg }) })
         agent.on('done', ({ response, aborted }: { response: string; aborted?: boolean }) => {
           setCurrentTokens('')
           setAgentStatus('idle')
+          setConfirm(null)
           agentRef.current = null
           if (aborted) {
-            addMsg({ type: 'error', content: 'Aborted.' })
+            addMsg({ type: 'error', content: 'Stopped.' })
           } else if (response) {
             addMsg({ type: 'done', content: response })
           }
-          // empty response = error was already shown, nothing to add
         })
-        agent.run(input, cwd).catch((err: Error) => {
+        agent.run(cleanInput, cwd, allAtts, mode).catch((err: Error) => {
           setAgentStatus('error')
           addMsg({ type: 'error', content: String(err) })
           agentRef.current = null
@@ -617,11 +847,23 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   }, [addMsg, cwd, exit])
 
   useInput((key, inp) => {
+    // ── Mausrad-Scroll (SGR-Sequenz kommt durch readline als raw input) ──
+    if (key.startsWith('\x1b[<')) {
+      const m = key.match(/\x1b\[<(\d+)/)
+      if (m) {
+        const btn = parseInt(m[1])
+        if (btn === 64) { setScrollOffset(o => o + 3); return }
+        if (btn === 65) { setScrollOffset(o => Math.max(0, o - 3)); return }
+      }
+      return
+    }
+
     // ── Wenn Popup offen: nur Ctrl+C durchlassen, Rest übernimmt Popup ──
-    if (connectPopup || modelPicker) {
+    if (connectPopup || modelPicker || filePicker) {
       if (inp.ctrl && key === 'c') {
         setConnectPopup(false)
         setModelPicker(false)
+        setFilePicker(false)
       }
       return
     }
@@ -645,12 +887,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         if (inp.tab) {
           const sel = slashCmds[pickerIdx]
           if (sel) {
-            if (sel.cmd.endsWith(' ')) {
-              setInputValue(sel.cmd)  // Befehl mit Argument-Platzhalter
-            } else {
-              handleSubmit(sel.cmd.trim())  // Direkt ausführen
-              setInputValue('')
-            }
+            setInputValue(sel.cmd.endsWith(' ') ? sel.cmd : sel.cmd.trim())
             setPickerIdx(0)
           }
           return
@@ -659,13 +896,18 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         return
       }
 
-      // ── Kein Picker: normale History-Navigation ──
-      if (inp.tab && suggestion) { setInputValue(inputValue + suggestion); return }
+      // ── Kein Picker: Tab = Mode toggle (wenn kein Autocomplete) oder Autocomplete ──
+      if (inp.tab && !suggestion) { setMode(m => m === 'build' ? 'plan' : 'build'); return }
+      if (inp.tab && suggestion)  { setInputValue(inputValue + suggestion); return }
       if (inp.upArrow) {
+        // Empty input → scroll up; otherwise navigate history
+        if (inputValue === '') { setScrollOffset(o => o + 3); return }
         const next = Math.min(histIndex + 1, history.length - 1)
         setHistIndex(next); if (history[next]) setInputValue(history[next]); return
       }
       if (inp.downArrow) {
+        // Scrolled up + empty input → scroll back down; otherwise navigate history
+        if (inputValue === '' && scrollOffset > 0) { setScrollOffset(o => Math.max(0, o - 3)); return }
         const next = Math.max(histIndex - 1, -1)
         setHistIndex(next); setInputValue(next === -1 ? '' : history[next] || ''); return
       }
@@ -691,6 +933,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
   const config = cm.get()
   const providerLabel = config.llm.provider === 'lmstudio' ? 'LM Studio' : 'Ollama'
+  const modeLabel = mode === 'plan' ? 'PLAN MODE' : 'BUILD MODE'
 
   return (
     <Box flexDirection="column" height={termRows}>
@@ -701,7 +944,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           <Box flexGrow={1} alignItems="center" justifyContent="center">
             <Splash config={config} history={history} onSubmit={handleSubmit} />
           </Box>
-          <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} />
+          <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} mode={mode} />
         </>
       ) : (
         /* ── Chat view ── */
@@ -713,12 +956,13 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           {(() => {
             const pickerH   = showPicker ? slashCmds.length + 3 : 0
             const streamH   = (currentTokens || isRunning) ? 2 : 0
+            const attachH   = attachments.length > 0 ? 1 : 0
             const confirmDiffH = confirm?.diffPreview
               ? (confirm.diffPreview.contextBefore.length + confirm.diffPreview.oldLines.length +
                  confirm.diffPreview.newLines.length + confirm.diffPreview.contextAfter.length + 4)
               : 0
             const confirmH  = confirm ? 1 + confirmDiffH : 0
-            const INPUT_H   = 4
+            const INPUT_H   = 4 + attachH
             const STATUS_H  = 1
             const SCROLL_H  = 1  // Indikator-Zeile reservieren
             const reserved  = INPUT_H + STATUS_H + pickerH + streamH + confirmH + SCROLL_H
@@ -739,7 +983,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
                 {visible.map((turn, i) =>
                   turn.type === 'user'
-                    ? <UserBlock key={i} content={turn.content} />
+                    ? <UserBlock key={i} content={turn.content} timestamp={turn.timestamp} />
                     : <AgentBlock key={i} messages={turn.messages} model={config.llm.model} />
                 )}
 
@@ -757,26 +1001,25 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
             const cleanResponse = response
               .replace(/```json[\s\S]*?```/g, '')
               .replace(/\{[\s\S]*?"tool"\s*:/g, '')
-            const lastThinkLine = thinking.trimEnd().split('\n').slice(-1)[0] ?? ''
+            const thinkLines = thinking.trimEnd().split('\n').filter(l => l.trim()).slice(-3)
 
             return (
-              <Box marginBottom={1} flexDirection="column">
-                {/* Thinking content */}
+              <Box marginBottom={0} flexDirection="column">
                 {thinking && (
-                  <Box marginBottom={0}>
-                    <Text color="#374151">  ╰ </Text>
-                    <Box flexDirection="column" flexGrow={1}>
-                      <Box>
-                        <Text color="#6366F1" bold>thinking  </Text>
-                        <Text color="#4B5563" italic wrap="wrap">
-                          {lastThinkLine.slice(0, 120)}
-                        </Text>
-                        {stillThinking && <ThinkingDots label="" />}
-                      </Box>
+                  <Box flexDirection="column">
+                    <Box>
+                      <Text color="#3B82F6">  │ </Text>
+                      <Text color="#6366F1" bold>Reasoning</Text>
+                      {stillThinking && <ThinkingDots label="" />}
                     </Box>
+                    {thinkLines.map((line, i) => (
+                      <Box key={i}>
+                        <Text color="#3B82F6">  │ </Text>
+                        <Text color="#4B5563" italic>{line.slice(0, termCols - 10)}</Text>
+                      </Box>
+                    ))}
                   </Box>
                 )}
-                {/* Response / spinner */}
                 <Box>
                   <Text color="#3B82F6">  │ </Text>
                   <Box flexGrow={1}>
@@ -796,7 +1039,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
           {/* Confirm dialog */}
           {confirm && (
-            <Box flexDirection="column" marginBottom={1}>
+            <Box flexDirection="column" marginX={1} marginBottom={1} borderStyle="single" borderColor="#F59E0B">
               {confirm.diffPreview && (
                 <DiffView
                   filePath={confirm.diffPreview.filePath}
@@ -807,36 +1050,13 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                   contextAfter={confirm.diffPreview.contextAfter}
                 />
               )}
-              <Box paddingX={4}>
-                <Text color="#F59E0B">Allow? </Text>
-                <Text color="#9CA3AF">{confirm.reason} </Text>
-                <Text color="#22C55E">[y]</Text><Text color="#9CA3AF">/</Text><Text color="#EF4444">[n]</Text>
-              </Box>
-            </Box>
-          )}
-
-          {/* ── Slash-Command Picker (Discord-Stil) ── */}
-          {showPicker && (
-            <Box flexDirection="column" borderStyle="round" borderColor="#2D4A7A" marginX={1}>
-              {slashCmds.map((cmd, i) => {
-                const sel = i === pickerIdx
-                const typed = inputValue.length
-                return (
-                  <Box key={cmd.cmd} paddingX={1}>
-                    <Text color={sel ? '#3B82F6' : '#374151'}>{sel ? '▶ ' : '  '}</Text>
-                    <Text color={sel ? '#93C5FD' : '#9CA3AF'} bold>{cmd.cmd.slice(0, typed)}</Text>
-                    <Text color={sel ? '#60A5FA' : '#6B7280'} bold>{cmd.cmd.slice(typed).trimEnd()}</Text>
-                    <Text color={sel ? '#6B7280' : '#374151'}>  {cmd.description}</Text>
-                  </Box>
-                )
-              })}
-              <Box paddingX={2} borderStyle="single" borderTop borderColor="#1E3A5F">
-                <Text color="#374151">↑↓ </Text>
-                <Text color="#4B5563">navigate  </Text>
-                <Text color="#374151">tab/enter </Text>
-                <Text color="#4B5563">select  </Text>
-                <Text color="#374151">esc </Text>
-                <Text color="#4B5563">close</Text>
+              <Box paddingX={2} paddingY={0}>
+                <Text color="#F59E0B">Allow  </Text>
+                <Text color="#D1D5DB">{confirm.reason}</Text>
+                <Text color="#4B5563">  </Text>
+                <Text color="#22C55E">[y] yes</Text>
+                <Text color="#4B5563">  /  </Text>
+                <Text color="#EF4444">[n] no</Text>
               </Box>
             </Box>
           )}
@@ -868,39 +1088,106 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
             />
           )}
 
-          {/* Input box — fixed at bottom */}
-          <Box flexDirection="column" borderStyle="single" borderColor="#1E3A5F" marginX={1}>
+          {/* ── FilePicker ── */}
+          {filePicker && (
+            <FilePicker
+              files={fileList}
+              onSelect={async (path) => {
+                setFilePicker(false)
+                const att = await loadAttachment(path, cwd)
+                if (att) setAttachments(prev => [...prev, att])
+              }}
+              onCancel={() => setFilePicker(false)}
+            />
+          )}
+
+          {/* ── Slash-Command Picker — above input ── */}
+          {showPicker && (
+            <Box flexDirection="column" borderStyle="round" borderColor="#2D4A7A" marginX={1}>
+              {slashCmds.map((cmd, i) => {
+                const sel = i === pickerIdx
+                return (
+                  <Box key={cmd.cmd} paddingX={1}>
+                    <Text color={sel ? '#3B82F6' : '#374151'}>{sel ? '▶ ' : '  '}</Text>
+                    <Text color={sel ? '#60A5FA' : '#6B7280'} bold>{cmd.cmd.trimEnd()}</Text>
+                    <Text color={sel ? '#4B5563' : '#374151'}>  {cmd.description}</Text>
+                  </Box>
+                )
+              })}
+            </Box>
+          )}
+
+          {/* ── Input box ── */}
+          <Box flexDirection="column" borderStyle="single" borderColor={mode === 'plan' ? '#14532D' : '#1E3A5F'} marginX={1}>
+            {/* Attachment strip */}
+            {attachments.length > 0 && (
+              <Box paddingX={1} flexDirection="row">
+                {attachments.map((att, i) => (
+                  <Box key={i} marginRight={1}>
+                    <Text color={att.type === 'image' ? '#A78BFA' : '#60A5FA'}>
+                      @{att.name}
+                    </Text>
+                  </Box>
+                ))}
+              </Box>
+            )}
+
+            {/* Input row */}
             <Box paddingX={1}>
+              <Text color={
+                isRunning ? '#F59E0B' :
+                mode === 'plan' ? '#22C55E' : '#3B82F6'
+              } bold>{'> '}</Text>
               <TextInput
                 value={inputValue}
                 onChange={handleInputChange}
                 onSubmit={handleSubmit}
-                placeholder=""
-                focus={agentStatus === 'idle' && !confirm && !connectPopup && !modelPicker}
+                placeholder={
+                  isRunning
+                    ? 'inject message to agent...'
+                    : mode === 'plan'
+                      ? 'describe what to plan...'
+                      : '/ for commands  ·  @ to attach files'
+                }
+                focus={!confirm && !connectPopup && !modelPicker && !filePicker}
               />
+              {suggestion && !isRunning && <Text color="#1F2937">{suggestion}</Text>}
             </Box>
+
+            {/* Hint bar */}
             <Box paddingX={1} justifyContent="space-between">
               <Box>
-                <Text color="#3B82F6" bold>Build</Text>
-                <Text color="#6B7280"> · </Text>
-                <Text color="#9CA3AF" bold>{config.llm.model}</Text>
-                <Text color="#4B5563">  {providerLabel}</Text>
+                {isRunning ? (
+                  <>
+                    <Text color="#F59E0B">ctrl+c </Text>
+                    <Text color="#6B7280">abort  </Text>
+                    <Text color="#4B5563">↵ </Text>
+                    <Text color="#6B7280">inject message</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text color="#4B5563">↵ </Text>
+                    <Text color="#6B7280">send  </Text>
+                    <Text color="#4B5563">tab </Text>
+                    <Text color="#6B7280">{suggestion ? 'complete' : 'switch mode'}  </Text>
+                    <Text color="#4B5563">@ </Text>
+                    <Text color="#6B7280">attach</Text>
+                  </>
+                )}
               </Box>
               <Box>
-                {suggestion
-                  ? <Text color="#374151">{suggestion}  </Text>
-                  : null
-                }
-                <Text color="#4B5563">enter </Text>
-                <Text color="#6B7280">send  </Text>
-                <Text color="#4B5563">tab </Text>
-                <Text color="#6B7280">complete</Text>
+                <Text
+                  backgroundColor={mode === 'plan' ? '#166534' : '#1D4ED8'}
+                  color={mode === 'plan' ? '#86EFAC' : '#BFDBFE'}
+                > {mode === 'plan' ? 'PLAN' : 'BUILD'} </Text>
+                <Text color="#374151">  </Text>
+                <Text color="#9CA3AF">{config.llm.model.length > 24 ? config.llm.model.slice(0, 24) + '…' : config.llm.model}</Text>
               </Box>
             </Box>
           </Box>
 
           {/* Status bar — 1 line */}
-          <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} />
+          <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} mode={mode} />
         </>
       )}
 

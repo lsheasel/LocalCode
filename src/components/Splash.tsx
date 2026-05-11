@@ -96,37 +96,43 @@ export const Splash: React.FC<Props> = ({ config, history, onSubmit }) => {
 
       <Text> </Text>
 
-      {/* Input panel — opencode style: left accent bar │ */}
-      <Box flexDirection="row">
-        <Text color="#3B82F6" bold>│</Text>
-        <Box flexDirection="column" paddingLeft={1} minWidth={56}>
-          {/* Input line */}
+      {/* Input panel */}
+      <Box flexDirection="column" borderStyle="single" borderColor="#1E3A5F" minWidth={60}>
+        {/* Input line */}
+        <Box paddingX={1}>
+          <Text color="#3B82F6" bold>{'> '}</Text>
+          <TextInput
+            value={value}
+            onChange={handleChange}
+            onSubmit={handleSubmit}
+            placeholder='ask anything  ·  / for commands  ·  @ to attach'
+          />
+          {suggestion && <Text color="#1F2937">{suggestion}</Text>}
+        </Box>
+        {/* Model / mode line */}
+        <Box paddingX={1} justifyContent="space-between">
           <Box>
-            <TextInput
-              value={value}
-              onChange={handleChange}
-              onSubmit={handleSubmit}
-              placeholder='Ask anything... "Fix a TODO in the codebase"'
-            />
-            {suggestion && <Text color="#374151">{suggestion}</Text>}
+            <Text color="#4B5563">↵ </Text>
+            <Text color="#6B7280">send  </Text>
+            <Text color="#4B5563">tab </Text>
+            <Text color="#6B7280">{suggestion ? 'complete' : 'autocomplete'}</Text>
           </Box>
-          {/* Model info line */}
           <Box>
-            <Text color="#3B82F6" bold>Build</Text>
-            <Text color="white"> {config.llm.model} </Text>
-            <Text color="#6B7280">({config.llm.provider})</Text>
+            <Text backgroundColor="#1D4ED8" color="#BFDBFE"> BUILD </Text>
+            <Text color="#374151">  </Text>
+            <Text color="#9CA3AF">{config.llm.model.length > 20 ? config.llm.model.slice(0, 20) + '…' : config.llm.model}</Text>
           </Box>
         </Box>
       </Box>
 
       {/* Keyboard hints */}
       <Box paddingLeft={2} marginTop={1}>
-        <Text color="#374151">tab </Text>
-        <Text color="#6B7280">complete   </Text>
-        <Text color="#374151">ctrl+c </Text>
-        <Text color="#6B7280">quit   </Text>
-        <Text color="#374151">↑↓ </Text>
-        <Text color="#6B7280">history</Text>
+        <Text color="#4B5563">↑↓ </Text>
+        <Text color="#6B7280">history  </Text>
+        <Text color="#4B5563">@ </Text>
+        <Text color="#6B7280">attach  </Text>
+        <Text color="#4B5563">ctrl+c </Text>
+        <Text color="#6B7280">quit</Text>
       </Box>
 
       <Text> </Text>

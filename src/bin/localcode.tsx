@@ -70,13 +70,17 @@ function enterAltScreen(): void {
     '\x1B[?1049h' + // enter alternate screen buffer
     '\x1B[2J'    + // clear screen
     '\x1B[3J'    + // clear scrollback
-    '\x1B[H'       // move cursor to top-left
+    '\x1B[H'     + // move cursor to top-left
+    '\x1b[?1000h\x1b[?1006h' // enable SGR mouse tracking (scroll events)
   )
 }
 
 function exitAltScreen(): void {
   if (!useAltScreen) return
-  process.stdout.write('\x1B[?1049l') // exit alternate screen (restores previous content)
+  process.stdout.write(
+    '\x1b[?1006l\x1b[?1000l' + // disable mouse tracking
+    '\x1B[?1049l'               // exit alternate screen
+  )
 }
 
 // Restore terminal on any unexpected exit

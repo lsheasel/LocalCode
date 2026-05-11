@@ -12,6 +12,15 @@ export interface LLMConfig {
 export interface Message {
   role: 'system' | 'user' | 'assistant'
   content: string
+  images?: string[]   // base64-encoded images for multimodal models
+}
+
+export interface Attachment {
+  path: string
+  name: string
+  type: 'image' | 'file'
+  data: string        // base64 for images, text content for files
+  mimeType?: string
 }
 
 export interface ToolCall {
@@ -23,6 +32,7 @@ export interface ToolResult {
   success: boolean
   output: string
   error?: string
+  images?: string[]   // base64 screenshots / images returned by a tool
   meta?: {
     diffPath?: string
     diffOld?: string[]

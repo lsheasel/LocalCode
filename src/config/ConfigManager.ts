@@ -1,12 +1,13 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { AppConfig, LLMConfig } from '../shared/types'
+import { AppConfig, LLMConfig, AgentMessage } from '../shared/types'
 import { DEFAULT_CONFIG } from '../shared/constants'
 
-const CONFIG_DIR = path.join(os.homedir(), '.localcode')
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
-const HISTORY_FILE = path.join(CONFIG_DIR, 'history.json')
+const CONFIG_DIR    = path.join(os.homedir(), '.localcode')
+const CONFIG_FILE   = path.join(CONFIG_DIR, 'config.json')
+const HISTORY_FILE  = path.join(CONFIG_DIR, 'history.json')
+const SESSIONS_DIR  = path.join(CONFIG_DIR, 'sessions')
 
 export class ConfigManager {
   private static instance: ConfigManager
@@ -78,5 +79,44 @@ export class ConfigManager {
 
   getConfigPath(): string {
     return CONFIG_FILE
+  }
+
+  // ── Session management ───────────────────────────────────────────────────────
+
+  private ensureSessions(): void {
+    if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true })
+  }
+
+  listSessions(): string[] {
+    try {
+      this.ensureSessions()
+      return fs.readdirSync(SESSIONS_DIR)
+        .filter(f => f.endsWith('.json'))
+        .map(f => f.slice(0, -5))
+        .sort()
+    } catch { return [] }
+  }
+
+  saveSession(name: string, messages: AgentMessage[]): void {
+    try {
+      this.ensureSessions()
+      const file = path.join(SESSIONS_DIR, `${name}.json`)
+      fs.writeFileSync(file, JSON.stringify(messages, null, 2), 'utf-8')
+    } catch {}
+  }
+
+  loadSession(name: string): AgentMessage[] | null {
+    try {
+      const file = path.join(SESSIONS_DIR, `${name}.json`)
+      if (!fs.existsSync(file)) return null
+      return JSON.parse(fs.readFileSync(file, 'utf-8')) as AgentMessage[]
+    } catch { return null }
+  }
+
+  deleteSession(name: string): void {
+    try {
+      const file = path.join(SESSIONS_DIR, `${name}.json`)
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+    } catch {}
   }
 }

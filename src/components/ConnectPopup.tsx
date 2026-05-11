@@ -3,9 +3,8 @@ import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 
 const PROVIDERS = [
-  { id: 'ollama',    label: 'Ollama',            defaultPort: '11434', urlSuffix: ''    },
-  { id: 'lmstudio', label: 'LM Studio',          defaultPort: '1234',  urlSuffix: '/v1' },
-  { id: 'openai',   label: 'OpenAI Compatible',  defaultPort: '8080',  urlSuffix: '/v1' },
+  { id: 'ollama',    label: 'Ollama',    defaultPort: '11434', urlSuffix: ''    },
+  { id: 'lmstudio', label: 'LM Studio', defaultPort: '1234',  urlSuffix: '/v1' },
 ]
 
 type Step = 'provider' | 'ip' | 'port'
@@ -50,7 +49,7 @@ export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
     if (step === 'port') {
       if (inp.escape) { setStep('ip'); return }
       if (inp.return) {
-        const provId = selectedProv.id === 'openai' ? 'lmstudio' : selectedProv.id
+        const provId = selectedProv.id
         const url    = `http://${ip}:${port}${selectedProv.urlSuffix}`
         onConnect(provId, url)
         return
