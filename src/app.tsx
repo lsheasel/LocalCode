@@ -1174,9 +1174,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
               for (let c = 0; c < chunks; c++) rendered.push(l.slice(c * innerW, (c + 1) * innerW))
             }
             const overflow = Math.max(0, rendered.length - maxStreamLines)
-            const visibleText = overflow > 0
-              ? srcLines.slice(-Math.max(1, Math.floor(maxStreamLines * 0.9))).join('\n')
-              : cleanResponse
+            const visibleLines = rendered.slice(overflow)
 
             const thinkLines = thinking.trimEnd().split('\n').filter(l => l.trim()).slice(-3)
 
@@ -1192,7 +1190,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                     {thinkLines.map((line, i) => (
                       <Box key={i}>
                         <Text color="#3B82F6">  │ </Text>
-                        <Text color="#4B5563" italic>{line.slice(0, termCols - 10)}</Text>
+                        <Text color="#4B5563" italic>{line.slice(0, innerW)}</Text>
                       </Box>
                     ))}
                   </Box>
@@ -1203,19 +1201,30 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                     <Text color="#4B5563">↑ {overflow} lines above…</Text>
                   </Box>
                 )}
-                <Box>
-                  <Text color="#3B82F6">  │ </Text>
-                  <Box flexGrow={1}>
-                    {!currentTokens
-                      ? <Box><Text color="#6366F1">Thinking </Text><ThinkingDots label="" /></Box>
-                      : visibleText
-                        ? <Box><Text color="#D1D5DB" wrap="wrap">{visibleText}</Text><Text color="#3B82F6">█</Text></Box>
-                        : stillThinking
-                          ? <Box><Text color="#6366F1">Thinking </Text><ThinkingDots label="" /></Box>
-                          : null
-                    }
-                  </Box>
-                </Box>
+                {!currentTokens
+                  ? (
+                    <Box>
+                      <Text color="#3B82F6">  │ </Text>
+                      <Box flexGrow={1}><Text color="#6366F1">Thinking </Text><ThinkingDots label="" /></Box>
+                    </Box>
+                  )
+                  : visibleLines.length > 0
+                    ? visibleLines.map((line, i) => (
+                        <Box key={i}>
+                          <Text color="#3B82F6">  │ </Text>
+                          <Text color="#D1D5DB" wrap="truncate-end">{line || ' '}</Text>
+                          {i === visibleLines.length - 1 && <Text color="#3B82F6">█</Text>}
+                        </Box>
+                      ))
+                    : stillThinking
+                      ? (
+                        <Box>
+                          <Text color="#3B82F6">  │ </Text>
+                          <Box flexGrow={1}><Text color="#6366F1">Thinking </Text><ThinkingDots label="" /></Box>
+                        </Box>
+                      )
+                      : null
+                }
               </Box>
             )
           })()}

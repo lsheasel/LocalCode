@@ -151,13 +151,30 @@ export class AgentRuntime extends EventEmitter {
       this.emit('thinking')
       let fullResponse = ''
 
-      try {
-        await LLMRouter.stream(messages, config.llm, (token: string) => {
-          this.emit('token', token)
-          fullResponse += token
-        })
-      } catch (err) {
-        const msg = friendlyLLMError(err, config.llm)
+      const MAX_RETRIES = 3
+      let lastErr: unknown
+      let streamed = false
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        if (this.aborted) break
+        try {
+          fullResponse = ''
+          await LLMRouter.stream(messages, config.llm, (token: string) => {
+            this.emit('token', token)
+            fullResponse += token
+          })
+          streamed = true
+          break
+        } catch (err) {
+          lastErr = err
+          if (attempt < MAX_RETRIES - 1) {
+            // brief pause before retry, emit a token so UI shows we're retrying
+            this.emit('token', `\n[Retrying after error: ${String(err).split('\n')[0]}]\n`)
+            await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+          }
+        }
+      }
+      if (!streamed) {
+        const msg = friendlyLLMError(lastErr, config.llm)
         this.emit('error', msg)
         this.emit('done', { response: '' })
         return
@@ -238,9 +255,9 @@ export class AgentRuntime extends EventEmitter {
       // tokens in the first user message; images in later turns crash the tokenizer.
       const toolMsg: Message = {
         role: 'user',
-        content: `Tool "${toolCall.tool}" result:\n${
-          result.success ? result.output : `ERROR: ${result.error || 'Unknown error'}`
-        }`,
+        content: result.success
+          ? `Tool "${toolCall.tool}" result:\n${result.output}`
+          : `Tool "${toolCall.tool}" failed with error:\n${result.error || 'Unknown error'}\n\nTry a different approach and continue the task.`,
       }
       messages.push(toolMsg)
 
