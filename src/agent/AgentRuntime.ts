@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events'
 import * as os from 'os'
-import { resolve } from 'path'
+import { resolve, dirname } from 'path'
 import { readFile } from 'fs/promises'
+
+interface ConfirmResult { ok: boolean; trust: boolean }
 import { Message, ToolCall, ToolResult, Attachment } from '../shared/types'
 import { LLMRouter } from '../llm/LLMRouter'
 import { executeTool } from './tools'
@@ -20,17 +22,17 @@ const READ_ONLY_TOOLS = new Set([
 
 export class AgentRuntime extends EventEmitter {
   private aborted = false
-  private confirmResolve: ((ok: boolean) => void) | null = null
+  private confirmResolve: ((result: ConfirmResult) => void) | null = null
   private injectionQueue: string[] = []
 
   abort(): void {
     this.aborted = true
-    this.confirmResolve?.(false)
+    this.confirmResolve?.({ ok: false, trust: false })
     this.confirmResolve = null
   }
 
-  confirm(approved: boolean): void {
-    this.confirmResolve?.(approved)
+  confirm(approved: boolean, trustFolder = false): void {
+    this.confirmResolve?.({ ok: approved, trust: trustFolder })
     this.confirmResolve = null
   }
 
@@ -180,6 +182,12 @@ export class AgentRuntime extends EventEmitter {
         return
       }
 
+      // Abort may have been triggered while streaming — check before acting on the response
+      if (this.aborted) {
+        this.emit('done', { response: '', aborted: true })
+        return
+      }
+
       messages.push({ role: 'assistant', content: fullResponse })
 
       const toolCall = parseToolCall(fullResponse)
@@ -229,9 +237,42 @@ export class AgentRuntime extends EventEmitter {
           } catch {}
         }
 
+        // Skip confirmation for trusted paths (dangerous ops always require confirm)
+        if (!dangerous) {
+          const targetPath = resolve(workDir, String(
+            toolCall.arguments.path || toolCall.arguments.from || toolCall.arguments.command || ''
+          ))
+          if (ConfigManager.getInstance().isTrusted(targetPath)) {
+            // auto-approved — skip dialog
+            this.emit('tool_call', { toolCall })
+            const result = await executeTool(toolCall, workDir)
+            this.emit('tool_result', { toolCall, result })
+            const toolMsg: Message = {
+              role: 'user',
+              content: result.success
+                ? `Tool "${toolCall.tool}" result:\n${result.output}`
+                : `Tool "${toolCall.tool}" failed with error:\n${result.error || 'Unknown error'}\n\nTry a different approach and continue the task.`,
+            }
+            messages.push(toolMsg)
+            if (fullResponse.includes('DONE:')) {
+              const summary = extractDoneSummary(fullResponse)
+              if (summary) { this.emit('done', { response: summary }); return }
+            }
+            continue
+          }
+        }
+
         const confirmReason = dangerous ? dangerReason : toolCallReason(toolCall)
         this.emit('confirm_required', { toolCall, reason: confirmReason, diffPreview, dangerous })
-        const { confirmed, timedOut } = await this.waitForConfirmation()
+        const { confirmed, timedOut, trustFolder } = await this.waitForConfirmation()
+        // If user chose "trust folder", save the path and proceed
+        if (confirmed && trustFolder) {
+          const folderPath = resolve(workDir, String(
+            toolCall.arguments.path || toolCall.arguments.from || ''
+          ))
+          const folderDir = /\.[^/\\]+$/.test(folderPath) ? dirname(folderPath) : folderPath
+          ConfigManager.getInstance().trustPath(folderDir)
+        }
         if (!confirmed) {
           const result: ToolResult = { success: false, output: '', error: timedOut ? 'Confirmation timed out' : 'Denied by user' }
           this.emit('tool_result', { toolCall, result })
@@ -270,15 +311,9 @@ export class AgentRuntime extends EventEmitter {
     this.emit('done', { response: 'Reached maximum iteration limit.' })
   }
 
-  private waitForConfirmation(): Promise<{ confirmed: boolean; timedOut: boolean }> {
+  private waitForConfirmation(): Promise<{ confirmed: boolean; timedOut: boolean; trustFolder: boolean }> {
     return new Promise((resolve) => {
-      this.confirmResolve = (ok: boolean) => resolve({ confirmed: ok, timedOut: false })
-      setTimeout(() => {
-        if (this.confirmResolve) {
-          this.confirmResolve = null
-          resolve({ confirmed: false, timedOut: true })
-        }
-      }, 30000)
+      this.confirmResolve = ({ ok, trust }) => resolve({ confirmed: ok, timedOut: false, trustFolder: trust })
     })
   }
 }

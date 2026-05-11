@@ -2,7 +2,7 @@ import { exec } from 'child_process'
 import { promisify } from 'util'
 import { readFile, writeFile, readdir, mkdir, rm, copyFile as fsCopyFile, rename, appendFile, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
-import { resolve, join, dirname } from 'path'
+import { resolve, join, dirname, normalize } from 'path'
 import * as os from 'os'
 import { ToolCall, ToolResult } from '../../shared/types'
 import { lspCheck } from '../../lsp/LspRunner'
@@ -42,7 +42,12 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
 
       // ── File system ───────────────────────────────────────────────────────────
       case 'read_file':
-        return readFileTool(String(args.path || ''), cwd)
+        return readFileTool(
+          String(args.path || ''),
+          cwd,
+          args.start_line ? Number(args.start_line) : undefined,
+          args.end_line   ? Number(args.end_line)   : undefined,
+        )
       case 'write_file':
         return writeFileTool(String(args.path || ''), String(args.content || ''), cwd)
       case 'append_file':
@@ -104,18 +109,23 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
 }
 
 function getShell(): string {
-  if (process.platform === 'win32') return 'cmd.exe'
-  // Use the user's shell if it's POSIX-compatible; fish uses incompatible syntax
+  if (process.platform === 'win32') return 'powershell.exe'
   const s = process.env.SHELL || ''
   if (s && !/fish/.test(s)) return s
-  // Prefer bash for richer syntax support; fall back to POSIX sh
   return '/bin/bash'
 }
 
+// Normalize a path for use in the current platform's shell
+function shellPath(p: string): string {
+  if (process.platform === 'win32') return normalize(p).replace(/\//g, '\\')
+  return p.replace(/\\/g, '/')
+}
+
 async function runShell(command: string, cwd: string): Promise<ToolResult> {
+  const normalizedCwd = shellPath(cwd)
   try {
     const { stdout, stderr } = await execAsync(command, {
-      cwd,
+      cwd: normalizedCwd,
       timeout: 60000,
       maxBuffer: 1024 * 1024 * 10,
       shell: getShell(),
@@ -132,12 +142,21 @@ async function runShell(command: string, cwd: string): Promise<ToolResult> {
   }
 }
 
-async function readFileTool(filePath: string, cwd: string): Promise<ToolResult> {
+async function readFileTool(filePath: string, cwd: string, startLine?: number, endLine?: number): Promise<ToolResult> {
   const resolved = resolve(cwd, filePath)
-  const content = await readFile(resolved, 'utf-8')
-  const lines = content.split('\n')
-  const numbered = lines.map((l, i) => `${String(i + 1).padStart(4)} │ ${l}`).join('\n')
-  return { success: true, output: `// ${resolved}\n${numbered}` }
+  try {
+    const content = await readFile(resolved, 'utf-8')
+    const lines = content.split('\n')
+    const total = lines.length
+    const from = startLine ? Math.max(1, startLine) - 1 : 0
+    const to   = endLine   ? Math.min(endLine, total)   : total
+    const slice = lines.slice(from, to)
+    const numbered = slice.map((l, i) => `${String(from + i + 1).padStart(5)} │ ${l}`).join('\n')
+    const range = (from > 0 || to < total) ? `, showing lines ${from + 1}–${to}` : ''
+    return { success: true, output: `// ${resolved}  (${total} lines total${range})\n${numbered}` }
+  } catch (err) {
+    return { success: false, output: '', error: `Cannot read "${filePath}": ${String(err)}` }
+  }
 }
 
 async function writeFileTool(filePath: string, content: string, cwd: string): Promise<ToolResult> {
@@ -182,9 +201,7 @@ async function listFilesTool(dirPath: string, cwd: string, recursive: boolean): 
   const resolved = resolve(cwd, dirPath)
   const SKIP = new Set([
     'node_modules', 'dist', '.git', '__pycache__', 'target', '.next', 'build',
-    'AppData', 'appdata', '.cache', 'cache', 'Cache', 'Temp', 'temp', 'tmp',
-    'OneDrive', 'OneDriveConsumer', 'Pictures', 'Videos', 'Music',
-    '.npm', '.yarn', '.pnpm-store', 'venv', '.venv', 'env',
+    '.cache', '.npm', '.yarn', '.pnpm-store', 'venv', '.venv', '.env',
   ])
   const MAX_DEPTH = 4
   const MAX_ENTRIES = 300

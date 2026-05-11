@@ -3,6 +3,7 @@ import { render } from 'ink'
 import chalk from 'chalk'
 import { App } from '../app'
 import { ConfigManager } from '../config/ConfigManager'
+import { discordPresence } from '../discord/DiscordPresence'
 
 const args = process.argv.slice(2)
 const cwd = process.cwd()
@@ -84,15 +85,16 @@ function exitAltScreen(): void {
 
 // Restore terminal on any unexpected exit
 process.on('exit', exitAltScreen)
-process.on('SIGINT', () => { exitAltScreen(); process.exit(0) })
-process.on('SIGTERM', () => { exitAltScreen(); process.exit(0) })
-process.on('uncaughtException', () => { exitAltScreen(); process.exit(1) })
+process.on('SIGINT', () => { exitAltScreen(); discordPresence.destroy(); process.exit(0) })
+process.on('SIGTERM', () => { exitAltScreen(); discordPresence.destroy(); process.exit(0) })
+process.on('uncaughtException', () => { exitAltScreen(); discordPresence.destroy(); process.exit(1) })
 
 enterAltScreen()
+discordPresence.connect().then(() => discordPresence.update('idle', cwd))
 
 // ── Launch Ink app ─────────────────────────────────────────────────────────
 const { waitUntilExit } = render(
-  React.createElement(App, { initialCommand, cwd }),
+  React.createElement(App, { initialCommand, cwd, onStatusChange: (s: string, dir: string) => discordPresence.update(s as any, dir) }),
   {
     exitOnCtrlC: false,
     patchConsole: true,

@@ -113,6 +113,36 @@ export class ConfigManager {
     } catch { return null }
   }
 
+  // ── Trusted paths ────────────────────────────────────────────────────────────
+
+  /** Returns true when targetPath is inside (or equal to) a trusted path. */
+  isTrusted(targetPath: string): boolean {
+    const norm = path.resolve(targetPath).replace(/\\/g, '/')
+    return (this.config.trustedPaths ?? []).some(t => {
+      const tp = path.resolve(t).replace(/\\/g, '/')
+      return norm === tp || norm.startsWith(tp + '/')
+    })
+  }
+
+  trustPath(p: string): void {
+    const norm = path.resolve(p)
+    const list = this.config.trustedPaths ?? []
+    if (!list.includes(norm)) {
+      this.config.trustedPaths = [...list, norm]
+      this.save()
+    }
+  }
+
+  untrustPath(p: string): void {
+    const norm = path.resolve(p)
+    this.config.trustedPaths = (this.config.trustedPaths ?? []).filter(t => path.resolve(t) !== norm)
+    this.save()
+  }
+
+  listTrusted(): string[] {
+    return this.config.trustedPaths ?? []
+  }
+
   deleteSession(name: string): void {
     try {
       const file = path.join(SESSIONS_DIR, `${name}.json`)

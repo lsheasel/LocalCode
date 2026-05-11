@@ -49,6 +49,7 @@ export interface AppConfig {
   fontSize: number
   shell: string
   workspaceDir: string
+  trustedPaths: string[]   // paths where write ops are auto-approved (+ all subpaths)
   security: {
     allowDangerousCommands: boolean
     requireConfirmation: string[]

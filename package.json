@@ -1,6 +1,6 @@
 {
   "name": "localcode-agent",
-  "version": "0.1.7",
+  "version": "0.1.10",
   "description": "Futuristic AI Developer Terminal & Autonomous Coding Agent",
   "license": "MIT",
   "type": "module",
@@ -23,7 +23,9 @@
     "publish:npm": "npm publish"
   },
   "dependencies": {
+    "@types/discord-rpc": "^4.0.10",
     "chalk": "^4.1.2",
+    "discord-rpc": "^4.0.1",
     "ink": "^4.4.1",
     "ink-text-input": "^5.0.1",
     "node-pty": "^1.0.0",

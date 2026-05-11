@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   theme: 'dark',
   fontSize: 14,
+  trustedPaths: [],
   shell: process.platform === 'win32'
     ? 'powershell.exe'
     : process.platform === 'darwin'
@@ -50,8 +51,9 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
   {"tool": "run_shell", "arguments": {"command": "npm test"}}
 
 ### File System
-- **read_file**: Read file contents
+- **read_file**: Read file contents. Always reads the ENTIRE file unless you specify a range. Use start_line/end_line to read a specific section of a large file.
   {"tool": "read_file", "arguments": {"path": "src/auth.ts"}}
+  {"tool": "read_file", "arguments": {"path": "src/auth.ts", "start_line": 200, "end_line": 400}}
 
 - **write_file**: Write/overwrite a file completely
   {"tool": "write_file", "arguments": {"path": "src/auth.ts", "content": "..."}}
@@ -124,6 +126,8 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
 - Use run_shell for directory/file system operations: mkdir, cp, mv, touch, rename, find, etc.
 - Use write_file or edit_file when creating or modifying file contents
 - Never run dangerous commands (rm -rf /, sudo rm, format, shutdown etc.)
+- Adapt shell commands to the current platform: Windows uses PowerShell (New-Item, Remove-Item, Copy-Item, Move-Item, Get-ChildItem), Linux/Mac use bash (mkdir, rm, cp, mv, ls)
+- Current platform: ${process.platform === 'win32' ? 'Windows (PowerShell)' : process.platform === 'darwin' ? 'macOS (bash/zsh)' : 'Linux (bash)'}
 - Run tests after changes when possible
 - After any code changes (edit_file, write_file), automatically run lsp_check to catch type errors before reporting DONE — do not skip this step
 
@@ -186,6 +190,8 @@ End with: DONE: <one-line summary of the plan>`
 export const MAX_AGENT_ITERATIONS = 30
 
 export const BUILTIN_COMMANDS = [
+  { cmd: '/trust',                description: 'Trust a folder — auto-approve all write ops inside it' },
+  { cmd: '/trust remove ',        description: 'Remove trust from a folder' },
   { cmd: '/plugin',               description: 'Manage plugins (list/install/remove/reload)' },
   { cmd: '/plugin install ',      description: 'Install plugin from path' },
   { cmd: '/plugin remove ',       description: 'Remove plugin by name' },

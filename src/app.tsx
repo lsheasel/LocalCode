@@ -66,7 +66,7 @@ const nextId = () => String(++_id)
 
 type AgentStatus = 'idle' | 'running' | 'thinking' | 'error'
 interface ConfirmRequest { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview; dangerous?: boolean }
-interface AppProps { initialCommand?: string; cwd: string }
+interface AppProps { initialCommand?: string; cwd: string; onStatusChange?: (status: string, cwd: string) => void }
 
 // ── Turn grouping ─────────────────────────────────────────────────────────────
 type Turn = { type: 'user'; content: string; timestamp: number } | { type: 'agent'; messages: AgentMessage[] }
@@ -163,7 +163,7 @@ const UserBlock: React.FC<{ content: string; timestamp: number }> = ({ content, 
 )
 
 // ── Single message row (inside agent block) ───────────────────────────────────
-const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
+const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({ msg, maxLines }) => {
   switch (msg.type) {
     case 'text':
       return <MarkdownText content={msg.content} />
@@ -216,35 +216,38 @@ const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
     case 'tool_call': {
       if (!msg.toolCall) return null
       const a = msg.toolCall.arguments
+      const cols = process.stdout.columns || 80
+      const maxPath = Math.max(20, cols - 20)
+      const tp = (s: unknown) => { const str = String(s || ''); return str.length > maxPath ? '…' + str.slice(-(maxPath - 1)) : str }
       const label = (() => {
         switch (msg.toolCall.tool) {
-          case 'run_shell':     return `$ ${String(a.command || '').slice(0, 60)}`
-          case 'read_file':     return `Read  ${a.path}`
-          case 'write_file':    return `Write ${a.path}`
-          case 'append_file':   return `Append ${a.path}`
+          case 'run_shell':     return `$ ${String(a.command || '').slice(0, cols - 10)}`
+          case 'read_file':     return `Read  ${tp(a.path)}`
+          case 'write_file':    return `Write  ${tp(a.path)}`
+          case 'append_file':   return `Append  ${tp(a.path)}`
           case 'edit_file':     return null
-          case 'delete_file':   return `Delete ${a.path}`
-          case 'move_file':     return `Move ${a.from} → ${a.to}`
-          case 'copy_file':     return `Copy ${a.from} → ${a.to}`
-          case 'create_dir':    return `mkdir ${a.path}`
-          case 'list_files':    return `ls ${a.path || '.'}`
-          case 'find_files':    return `find ${a.pattern}`
-          case 'search_files':  return `grep "${a.pattern}"`
+          case 'delete_file':   return `Delete  ${tp(a.path)}`
+          case 'move_file':     return `Move  ${tp(a.from)}  →  ${tp(a.to)}`
+          case 'copy_file':     return `Copy  ${tp(a.from)}  →  ${tp(a.to)}`
+          case 'create_dir':    return `mkdir  ${tp(a.path)}`
+          case 'list_files':    return `ls  ${tp(a.path || '.')}`
+          case 'find_files':    return `find  ${tp(a.pattern)}`
+          case 'search_files':  return `grep  "${tp(a.pattern)}"`
           case 'git_status':    return 'git status'
           case 'git_diff':      return 'git diff'
           case 'git_log':       return 'git log'
           case 'git_commit':    return `git commit  "${String(a.message || '').slice(0, 40)}"`
-          case 'web_fetch':     return `fetch ${String(a.url || '').slice(0, 55)}`
-          case 'http_request':  return `${a.method || 'GET'}  ${String(a.url || '').slice(0, 50)}`
-          case 'lsp_check':     return `lsp check  ${String(a.path || '.')}`
+          case 'web_fetch':     return `fetch  ${tp(a.url)}`
+          case 'http_request':  return `${a.method || 'GET'}  ${tp(a.url)}`
+          case 'lsp_check':     return `lsp  ${tp(a.path || '.')}`
           default:              return msg.toolCall.tool
         }
       })()
       if (!label) return null
       return (
-        <Box paddingLeft={1}>
-          <Text color="#4B5563">  </Text>
-          <Text color="#6B7280">{label}</Text>
+        <Box flexDirection="row" paddingLeft={1}>
+          <Text color="#374151">  </Text>
+          <Text color="#6B7280" wrap="truncate-end">{label}</Text>
         </Box>
       )
     }
@@ -252,18 +255,23 @@ const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
       if (!msg.toolCall) return null
       if (msg.toolCall.tool === 'edit_file') return null
       if (!msg.toolResult?.success) {
+        const errText = (msg.toolResult?.error || 'error').split('\n')[0]
         return (
-          <Box paddingLeft={1}>
-            <Text color="#EF4444">  ✗ {(msg.toolResult?.error || '').slice(0, 80)}</Text>
+          <Box flexDirection="row" paddingLeft={1}>
+            <Text color="#EF4444" wrap="truncate-end">  ✗  {errText}</Text>
           </Box>
         )
       }
-      const lines = (msg.toolResult.output || '').split('\n').filter(Boolean)
-      const summary = lines.length > 1 ? `${lines.length} lines` : (lines[0] || '').slice(0, 50)
+      const outLines = (msg.toolResult.output || '').split('\n').filter(Boolean)
+      // skip trivial single-line outputs that are just the path echoed back
+      const summary = outLines.length > 1
+        ? `${outLines.length} lines`
+        : (outLines[0] || '').slice(0, 60)
+      if (!summary) return null
       return (
-        <Box paddingLeft={1}>
+        <Box flexDirection="row" paddingLeft={1}>
           <Text color="#374151">  </Text>
-          <Text color="#4B5563">{summary}</Text>
+          <Text color="#4B5563" wrap="truncate-end">{summary}</Text>
         </Box>
       )
     }
@@ -273,10 +281,24 @@ const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
       let clean = msg.content
         .replace(/```json[\s\S]*?```/gi, '')
         .replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?\}/g, '')
-        .replace(/\s*DONE:\s*<[^>]*>/gi, '')     // strip " DONE: <...>" completely
-        .replace(/\s*DONE:\s*.*/gi, '')          // strip " DONE: ..." and everything after
+        .replace(/\s*DONE:\s*<[^>]*>/gi, '')
+        .replace(/\s*DONE:\s*.*/gi, '')
         .trim()
-      return clean ? <MarkdownText content={clean} /> : null
+      if (!clean) return null
+      if (maxLines) {
+        const allLines = clean.split('\n')
+        if (allLines.length > maxLines) {
+          const hidden = allLines.length - maxLines
+          clean = allLines.slice(-maxLines).join('\n')
+          return (
+            <Box flexDirection="column">
+              <Text color="#4B5563">  ↑ {hidden} more lines above (scroll up to read)…</Text>
+              <MarkdownText content={clean} />
+            </Box>
+          )
+        }
+      }
+      return <MarkdownText content={clean} />
     }
     default:
       return null
@@ -284,7 +306,7 @@ const MsgRow: React.FC<{ msg: AgentMessage }> = ({ msg }) => {
 }
 
 // ── Agent turn block (blue left bar, splits on DiffViews) ─────────────────────
-const AgentBlock: React.FC<{ messages: AgentMessage[]; model: string }> = ({ messages, model }) => {
+const AgentBlock: React.FC<{ messages: AgentMessage[]; model: string; maxLines?: number }> = ({ messages, model, maxLines }) => {
   type Section = { type: 'content'; msgs: AgentMessage[] } | { type: 'diff'; msg: AgentMessage }
   const sections: Section[] = []
   let buf: AgentMessage[] = []
@@ -333,7 +355,7 @@ const AgentBlock: React.FC<{ messages: AgentMessage[]; model: string }> = ({ mes
           <Box key={i}>
             <Text color="#3B82F6">  │ </Text>
             <Box flexDirection="column" flexGrow={1}>
-              {sec.msgs.map(msg => <MsgRow key={msg.id} msg={msg} />)}
+              {sec.msgs.map((msg, mi) => <MsgRow key={msg.id} msg={msg} maxLines={isLast && mi === sec.msgs.length - 1 ? maxLines : undefined} />)}
               {isLast && hasContent && ts && (
                 <Box marginTop={0}>
                   <Text color="#374151">{model}</Text>
@@ -379,7 +401,7 @@ function getSuggestion(input: string, history: string[]): string {
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
-export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
+export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange }) => {
   const { exit } = useApp()
   const cm = ConfigManager.getInstance()
 
@@ -407,6 +429,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const [infoPopup, setInfoPopup]         = useState<{ title: string; content: string } | null>(null)
   const [infoScroll, setInfoScroll]       = useState(0)
 
+  const taskQueueRef   = useRef<string[]>([])  // tasks queued while agent is running
   const agentRef       = useRef<AgentRuntime | null>(null)
   const ptyRef         = useRef<PtyManager | null>(null)
   const hiddenAboveRef = useRef(0)
@@ -436,6 +459,10 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const suggestion = !showSplash && !showPicker && !connectPopup && !modelPicker && agentStatus === 'idle'
     ? getSuggestion(inputValue, history) : ''
   const isRunning = agentStatus === 'thinking' || agentStatus === 'running'
+
+  useEffect(() => {
+    onStatusChange?.(agentStatus, cwd)
+  }, [agentStatus])
 
   useEffect(() => {
     const onResize = () => { setTermRows(process.stdout.rows || 24); setTermCols(process.stdout.columns || 80) }
@@ -569,6 +596,31 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     // ── exit / clear (also without slash) ────────────────────────────────────
     if (input === '/exit' || input === 'exit' || input === 'quit') { exit(); return }
     if (input === '/clear' || input === 'clear') { setMessages([]); setConvHistory([]); setInfoPopup(null); return }
+
+    // ── /trust ────────────────────────────────────────────────────────────────
+    if (input === '/trust' || input.startsWith('/trust ')) {
+      const rest = input.slice(6).trim()
+      const [sub, ...r2] = rest.split(/\s+/)
+      const arg = r2.join(' ').trim() || sub
+
+      if (!sub || sub === 'list') {
+        const list = cm.listTrusted()
+        showInfo('trusted paths', list.length
+          ? ['**Trusted paths** (write ops auto-approved)', '', ...list.map(p => `  • ${p}`), '', '  /trust remove <path>   Remove trust']
+          : ['  No trusted paths yet.', '', '  /trust <path>   Trust a folder', '  /trust .         Trust current working directory'])
+      } else if (sub === 'remove') {
+        if (!arg || arg === 'remove') { addMsg({ type: 'error', content: 'Usage: /trust remove <path>' }); return }
+        const { resolve: nodeResolve } = await import('path')
+        cm.untrustPath(nodeResolve(cwd, arg))
+        addMsg({ type: 'done', content: `Removed trust: ${arg}` })
+      } else {
+        const { resolve: nodeResolve } = await import('path')
+        const abs = nodeResolve(cwd, sub)
+        cm.trustPath(abs)
+        addMsg({ type: 'done', content: `Trusted: ${abs}\nAll write operations in this folder and subfolders will be auto-approved.` })
+      }
+      cm.addHistory(input); setHistory(cm.getHistory()); return
+    }
 
     // ── /lsp ──────────────────────────────────────────────────────────────────
     if (input === '/lsp' || input.startsWith('/lsp ')) {
@@ -871,10 +923,15 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           break
         }
 
-        // Mid-task injection: if agent is already running, inject the message
+        // Mid-task: inject short side-notes, queue full tasks for after agent finishes
         if (isRunning && agentRef.current) {
-          agentRef.current.inject(input)
-          addMsg({ type: 'text', content: `> [btw] ${input}` })
+          if (input.length < 120) {
+            agentRef.current.inject(input)
+            addMsg({ type: 'text', content: `> [btw] ${input}` })
+          } else {
+            taskQueueRef.current.push(input)
+            addMsg({ type: 'text', content: `> [queued] ${input}` })
+          }
           break
         }
 
@@ -961,16 +1018,19 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           setAgentStatus('idle')
           setConfirm(null)
           agentRef.current = null
-          if (aborted) {
-            addMsg({ type: 'error', content: 'Stopped.' })
-          } else if (response) {
+          // "Aborted." is already shown by the Ctrl+C handler — don't double-print
+          if (!aborted && response) {
             addMsg({ type: 'done', content: response })
-            // Append this turn to conversation history (keep last 20 msgs = 10 turns)
             setConvHistory(prev => [
               ...prev,
               { role: 'user' as const, content: cleanInput },
               { role: 'assistant' as const, content: response },
-            ].slice(-20))
+            ].slice(-40))
+          }
+          // Run next queued task if any (only when not aborted)
+          if (!aborted && taskQueueRef.current.length > 0) {
+            const next = taskQueueRef.current.shift()!
+            setTimeout(() => handleSubmit(next), 50)
           }
         })
         const { convHistory } = s.current
@@ -1056,6 +1116,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     if (inp.ctrl && key === 'c') {
       if (agentRef.current) {
         agentRef.current.abort(); agentRef.current = null
+        taskQueueRef.current = []  // discard queued tasks when aborting
         if (tokenFlushRef.current) { clearTimeout(tokenFlushRef.current); tokenFlushRef.current = null }
         tokenBufRef.current = ''; tokenCntRef.current = 0
         setAgentStatus('idle'); setCurrentTokens('')
@@ -1068,14 +1129,41 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     if (inp.ctrl && key === 'k') { setInputValue(''); setHistIndex(-1); return }
 
     if (confirm) {
-      if (key === 'y' || key === 'Y') { agentRef.current?.confirm(true); setConfirm(null) }
-      else if (key === 'n' || key === 'N' || inp.escape) { agentRef.current?.confirm(false); setConfirm(null) }
+      if (key === 'y' || key === 'Y') { agentRef.current?.confirm(true, false); setConfirm(null) }
+      else if (key === 't' || key === 'T') { agentRef.current?.confirm(true, true); setConfirm(null) }
+      else if (key === 'n' || key === 'N' || inp.escape) { agentRef.current?.confirm(false, false); setConfirm(null) }
     }
   })
 
   const config = cm.get()
   const providerLabel = config.llm.provider === 'lmstudio' ? 'LM Studio' : 'Ollama'
   const modeLabel = mode === 'plan' ? 'PLAN MODE' : 'BUILD MODE'
+
+  // ── Layout budget (computed once, drives both chat turns AND stream block) ────
+  const { thinking: streamThinking } = parseThinking(currentTokens)
+  const streamThinkReserve = streamThinking ? 5 : 0  // 2 header + 3 think lines
+  const maxStreamLines = (currentTokens || isRunning)
+    ? Math.max(3, termRows - 14 - streamThinkReserve)
+    : 0
+  const innerStreamW = Math.max(20, termCols - 10)
+  const streamH = (currentTokens || isRunning)
+    ? (currentTokens ? streamThinkReserve + 1 + maxStreamLines : 2)
+    : 0
+  const layoutPickerH  = showPicker ? Math.min(slashCmds.length + 3, 10) : 0
+  const layoutAttachH  = attachments.length > 0 ? 1 : 0
+  const layoutConfirmDiffH = confirm?.diffPreview
+    ? Math.min(
+        confirm.diffPreview.contextBefore.length + confirm.diffPreview.oldLines.length +
+        confirm.diffPreview.newLines.length + confirm.diffPreview.contextAfter.length + 4,
+        termRows - 10
+      )
+    : 0
+  const layoutConfirmH = confirm ? Math.min(3 + layoutConfirmDiffH, termRows - 8) : 0
+  const layoutInputH   = 4 + layoutAttachH
+  // 1 = status bar, 1 = scroll indicator line, 1 = spacer
+  const layoutReserved = layoutInputH + 1 + layoutPickerH + streamH + layoutConfirmH + 3
+  const chatAvailable  = Math.max(2, termRows - layoutReserved)
+  const chatInnerW     = Math.max(20, termCols - 8)
 
   return (
     <Box flexDirection="column" height={termRows}>
@@ -1104,20 +1192,9 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           ) : null}
 
           {!infoPopup && (() => {
-            const pickerH   = showPicker ? slashCmds.length + 3 : 0
-            const streamH   = (currentTokens || isRunning) ? (currentTokens.includes('<think>') ? 5 : 2) : 0
-            const attachH   = attachments.length > 0 ? 1 : 0
-            const confirmDiffH = confirm?.diffPreview
-              ? (confirm.diffPreview.contextBefore.length + confirm.diffPreview.oldLines.length +
-                 confirm.diffPreview.newLines.length + confirm.diffPreview.contextAfter.length + 4)
-              : 0
-            const confirmH  = confirm ? 1 + confirmDiffH : 0
-            const reserved  = (4 + attachH) + 1 + pickerH + streamH + confirmH + 1 + 2
-            const available = Math.max(2, termRows - reserved)
-            const innerW    = Math.max(20, termCols - 8)
             const allTurns  = groupIntoTurns(messages)
             const safeOffset = Math.min(scrollOffset, Math.max(0, allTurns.length - 1))
-            const { visible, hiddenAbove, hiddenBelow } = getVisibleTurns(allTurns, available, innerW, safeOffset)
+            const { visible, hiddenAbove, hiddenBelow } = getVisibleTurns(allTurns, chatAvailable, chatInnerW, safeOffset)
             hiddenAboveRef.current = hiddenAbove
 
             return (
@@ -1136,7 +1213,8 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                 {visible.map((turn, i) =>
                   turn.type === 'user'
                     ? <UserBlock key={i} content={turn.content} timestamp={turn.timestamp} />
-                    : <AgentBlock key={i} messages={turn.messages} model={config.llm.model} />
+                    : <AgentBlock key={i} messages={turn.messages} model={config.llm.model}
+                        maxLines={i === visible.length - 1 ? Math.max(5, chatAvailable - 4) : undefined} />
                 )}
 
                 {/* Scroll-Indikator unten (wenn nach oben gescrollt) */}
@@ -1159,19 +1237,13 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
             if (toolIdx !== -1) cleanResponse = cleanResponse.slice(0, toolIdx)
             cleanResponse = cleanResponse.trim()
 
-            // How many terminal lines can the streaming block use?
-            // Reserve: input box (4) + hint bar (1) + status (1) + think header (thinking ? 2 : 0) + padding (3)
-            const thinkReserve = thinking ? 2 + 3 : 0  // header + up to 3 think lines
-            const maxStreamLines = Math.max(3, termRows - 14 - thinkReserve)
-
-            // Slice to last N *rendered* lines (each source line may wrap)
-            const innerW = Math.max(20, termCols - 10)
+            // Use pre-computed maxStreamLines and innerStreamW (same values used in layout budget)
             const srcLines = cleanResponse.split('\n')
             const rendered: string[] = []
             for (const l of srcLines) {
               if (!l) { rendered.push(''); continue }
-              const chunks = Math.max(1, Math.ceil(l.length / innerW))
-              for (let c = 0; c < chunks; c++) rendered.push(l.slice(c * innerW, (c + 1) * innerW))
+              const chunks = Math.max(1, Math.ceil(l.length / innerStreamW))
+              for (let c = 0; c < chunks; c++) rendered.push(l.slice(c * innerStreamW, (c + 1) * innerStreamW))
             }
             const overflow = Math.max(0, rendered.length - maxStreamLines)
             const visibleLines = rendered.slice(overflow)
@@ -1190,7 +1262,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                     {thinkLines.map((line, i) => (
                       <Box key={i}>
                         <Text color="#3B82F6">  │ </Text>
-                        <Text color="#4B5563" italic>{line.slice(0, innerW)}</Text>
+                        <Text color="#4B5563" italic>{line.slice(0, innerStreamW)}</Text>
                       </Box>
                     ))}
                   </Box>
@@ -1248,15 +1320,24 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                   contextAfter={confirm.diffPreview.contextAfter}
                 />
               )}
-              <Box paddingX={2} paddingY={0}>
-                <Text color={confirm.dangerous ? '#EF4444' : '#F59E0B'}>
-                  {confirm.dangerous ? '⚠ ' : ''}Allow{confirm.dangerous ? '' : ''}{'  '}
-                </Text>
-                <Text color="#D1D5DB">{confirm.reason}</Text>
-                <Text color="#4B5563">  </Text>
-                <Text color="#22C55E">[y] yes</Text>
-                <Text color="#4B5563">  /  </Text>
-                <Text color="#EF4444">[n] no</Text>
+              <Box paddingX={2} paddingY={0} flexDirection="column">
+                <Box>
+                  <Text color={confirm.dangerous ? '#EF4444' : '#F59E0B'}>
+                    {confirm.dangerous ? '⚠  ' : 'Allow  '}
+                  </Text>
+                  <Text color="#D1D5DB" wrap="truncate-end">{confirm.reason}</Text>
+                </Box>
+                <Box marginTop={0}>
+                  <Text color="#22C55E">[y] yes</Text>
+                  <Text color="#4B5563">  /  </Text>
+                  <Text color="#EF4444">[n] no</Text>
+                  {!confirm.dangerous && (
+                    <>
+                      <Text color="#4B5563">  /  </Text>
+                      <Text color="#A78BFA">[t] trust folder</Text>
+                    </>
+                  )}
+                </Box>
               </Box>
             </Box>
           )}
