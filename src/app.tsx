@@ -407,9 +407,14 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const [infoPopup, setInfoPopup]         = useState<{ title: string; content: string } | null>(null)
   const [infoScroll, setInfoScroll]       = useState(0)
 
-  const agentRef      = useRef<AgentRuntime | null>(null)
-  const ptyRef        = useRef<PtyManager | null>(null)
+  const agentRef       = useRef<AgentRuntime | null>(null)
+  const ptyRef         = useRef<PtyManager | null>(null)
   const hiddenAboveRef = useRef(0)
+  // Token buffering: accumulate in a ref, flush to state at most every 100 ms
+  // so the terminal doesn't repaint on every single token (ruins text selection).
+  const tokenBufRef    = useRef('')
+  const tokenCntRef    = useRef(0)
+  const tokenFlushRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [termRows, setTermRows] = useState(process.stdout.rows || 24)
   const [termCols, setTermCols] = useState(process.stdout.columns || 80)
@@ -911,14 +916,25 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
         const agent = new AgentRuntime()
         agentRef.current = agent
-        let totalTokens = 0
+
+        // Reset token buffer for this run
+        tokenBufRef.current = ''
+        tokenCntRef.current = 0
+        if (tokenFlushRef.current) { clearTimeout(tokenFlushRef.current); tokenFlushRef.current = null }
+
+        const flushTokens = () => {
+          tokenFlushRef.current = null
+          setCurrentTokens(tokenBufRef.current)
+          setTokenCount(tokenCntRef.current)
+        }
 
         agent.on('thinking', () => { setAgentStatus('thinking'); setCurrentTokens('') })
         agent.on('token', (token: string) => {
           setAgentStatus('running')
-          setCurrentTokens(prev => prev + token)
-          totalTokens += token.length
-          setTokenCount(totalTokens)
+          tokenBufRef.current += token
+          tokenCntRef.current += token.length
+          // Schedule a flush at most every 100 ms — reduces repaints so text selection isn't wiped
+          if (!tokenFlushRef.current) tokenFlushRef.current = setTimeout(flushTokens, 100)
         })
         agent.on('tool_call', ({ toolCall }: { toolCall: ToolCall }) => {
           setCurrentTokens('')
@@ -933,8 +949,14 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         agent.on('injection', ({ message }: { message: string }) => {
           // Already shown in the UI when inject() was called; just acknowledge
         })
-        agent.on('error', (msg: string) => { setAgentStatus('error'); addMsg({ type: 'error', content: msg }) })
+        agent.on('error', (msg: string) => {
+          if (tokenFlushRef.current) { clearTimeout(tokenFlushRef.current); tokenFlushRef.current = null }
+          tokenBufRef.current = ''; tokenCntRef.current = 0
+          setAgentStatus('error'); addMsg({ type: 'error', content: msg })
+        })
         agent.on('done', ({ response, aborted }: { response: string; aborted?: boolean }) => {
+          if (tokenFlushRef.current) { clearTimeout(tokenFlushRef.current); tokenFlushRef.current = null }
+          tokenBufRef.current = ''; tokenCntRef.current = 0
           setCurrentTokens('')
           setAgentStatus('idle')
           setConfirm(null)
@@ -1018,10 +1040,13 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       if (inp.tab && !suggestion) { setMode(m => m === 'build' ? 'plan' : 'build'); return }
       if (inp.tab && suggestion)  { setInputValue(inputValue + suggestion); return }
       if (inp.upArrow) {
+        // Empty input + not navigating history → scroll chat up (wheel-friendly)
+        if (inputValue === '' && histIndex === -1) { setScrollOffset(o => o + 1); return }
         const next = Math.min(histIndex + 1, history.length - 1)
         setHistIndex(next); if (history[next]) setInputValue(history[next]); return
       }
       if (inp.downArrow) {
+        if (inputValue === '' && histIndex === -1) { setScrollOffset(o => Math.max(0, o - 1)); return }
         const next = Math.max(histIndex - 1, -1)
         setHistIndex(next); setInputValue(next === -1 ? '' : history[next] || ''); return
       }
@@ -1031,6 +1056,8 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     if (inp.ctrl && key === 'c') {
       if (agentRef.current) {
         agentRef.current.abort(); agentRef.current = null
+        if (tokenFlushRef.current) { clearTimeout(tokenFlushRef.current); tokenFlushRef.current = null }
+        tokenBufRef.current = ''; tokenCntRef.current = 0
         setAgentStatus('idle'); setCurrentTokens('')
         addMsg({ type: 'error', content: 'Aborted.' })
       } else { exit() }
@@ -1057,7 +1084,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         /* ── Splash: fills terminal, status bar at bottom ── */
         <>
           <Box flexGrow={1} alignItems="center" justifyContent="center">
-            <Splash config={config} history={history} onSubmit={handleSubmit} />
+            <Splash config={config} history={history} mode={mode} onSubmit={handleSubmit} onToggleMode={() => setMode(m => m === 'build' ? 'plan' : 'build')} />
           </Box>
           <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} mode={mode} />
         </>
