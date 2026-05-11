@@ -1,29 +1,29 @@
 const vscode = require("vscode");
 
 function activate(context) {
-  const command = vscode.commands.registerCommand("erpcode.openTerminal", () => {
+  const command = vscode.commands.registerCommand("localcode.openTerminal", () => {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     const terminal = vscode.window.createTerminal({
-      name: "ERPCode",
+      name: "LocalCode",
       cwd: workspaceFolder?.uri.fsPath,
     });
 
     terminal.show(true);
-    terminal.sendText("erpcode", true);
+    terminal.sendText("localcode", true);
   });
 
   const view = vscode.window.registerWebviewViewProvider(
-    "erpcode.view",
+    "localcode.view",
     {
       resolveWebviewView(webviewView) {
-        vscode.commands.executeCommand("erpcode.openTerminal");
+        vscode.commands.executeCommand("localcode.openTerminal");
 
         webviewView.webview.html = `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ERPCode</title>
+    <title>LocalCode</title>
     <style>
       body {
         font-family: var(--vscode-font-family);
@@ -42,7 +42,7 @@ function activate(context) {
     </style>
   </head>
   <body>
-    <div class="title">ERPCode</div>
+    <div class="title">LocalCode</div>
     <div class="hint">Terminal wurde geoeffnet.</div>
   </body>
 </html>`;
