@@ -6,6 +6,7 @@ import { resolve, join, dirname } from 'path'
 import * as os from 'os'
 import { ToolCall, ToolResult } from '../../shared/types'
 import { lspCheck } from '../../lsp/LspRunner'
+import { PluginLoader } from '../../plugins/PluginLoader'
 
 const execAsync = promisify(exec)
 
@@ -91,8 +92,11 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
       case 'lsp_check':
         return lspCheckTool(String(args.path || '.'), cwd)
 
-      default:
+      default: {
+        const pluginTool = PluginLoader.getInstance().getTool(tool)
+        if (pluginTool) return pluginTool.handler(args, { cwd })
         return { success: false, output: '', error: `Unknown tool: ${tool}` }
+      }
     }
   } catch (err) {
     return { success: false, output: '', error: String(err) }

@@ -173,6 +173,10 @@ End with: DONE: <one-line summary of the plan>`
 export const MAX_AGENT_ITERATIONS = 30
 
 export const BUILTIN_COMMANDS = [
+  { cmd: '/plugin',               description: 'Manage plugins (list/install/remove/reload)' },
+  { cmd: '/plugin install ',      description: 'Install plugin from path' },
+  { cmd: '/plugin remove ',       description: 'Remove plugin by name' },
+  { cmd: '/plugin reload',        description: 'Reload all plugins' },
   { cmd: '/connect',              description: 'Connect to server (popup)' },
   { cmd: '/model',                description: 'Select model (popup)' },
   { cmd: '/attach',               description: 'Attach file or image (@-picker)' },

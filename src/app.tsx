@@ -19,6 +19,7 @@ import { LLMRouter } from './llm/LLMRouter'
 import { lspCheck } from './lsp/LspRunner'
 import { AgentMessage, ToolCall, ToolResult, Attachment } from './shared/types'
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from './shared/constants'
+import { PluginLoader } from './plugins/PluginLoader'
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'])
 const SKIP_DIRS  = new Set(['node_modules', '.git', 'dist', '__pycache__', '.next', 'build', 'target'])
@@ -400,6 +401,8 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const [fileList, setFileList]           = useState<string[]>([])
   const [attachments, setAttachments]     = useState<Attachment[]>([])
   const [mode, setMode]                   = useState<'build' | 'plan'>('build')
+  const [pluginCmds, setPluginCmds]       = useState<Array<{ cmd: string; description: string }>>([])
+
 
   const agentRef = useRef<AgentRuntime | null>(null)
   const ptyRef   = useRef<PtyManager | null>(null)
@@ -415,8 +418,9 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const showSplash = messages.length === 0 && agentStatus === 'idle' && !confirm
 
   // Slash-command picker: filter BUILTIN_COMMANDS when input starts with /
+  const allSlashCmds = [...BUILTIN_COMMANDS, ...pluginCmds]
   const slashCmds = (inputValue.startsWith('/') && agentStatus === 'idle' && !showSplash && !connectPopup && !modelPicker)
-    ? BUILTIN_COMMANDS.filter(c => c.cmd.toLowerCase().startsWith(inputValue.toLowerCase())).slice(0, 7)
+    ? allSlashCmds.filter(c => c.cmd.toLowerCase().startsWith(inputValue.toLowerCase())).slice(0, 7)
     : []
   const showPicker = slashCmds.length > 0
 
@@ -454,6 +458,12 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       const t = setTimeout(() => handleSubmit(initialCommand), 150)
       return () => clearTimeout(t)
     }
+  }, [])
+
+  useEffect(() => {
+    const loader = PluginLoader.getInstance()
+    loader.load()
+    setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
   }, [])
 
   const addMsg = useCallback((msg: Omit<AgentMessage, 'id' | 'timestamp'>) => {
@@ -676,6 +686,95 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       return
     }
 
+    // ── /plugin ───────────────────────────────────────────────────────────────
+    if (input === '/plugin' || input.startsWith('/plugin ')) {
+      const rest = input.slice(7).trim()
+      const [sub, ...rest2] = rest.split(/\s+/)
+      const arg = rest2.join(' ').trim()
+      const loader = PluginLoader.getInstance()
+
+      if (!sub || sub === 'list') {
+        const plugins = loader.getAll()
+        const errors  = loader.getErrors()
+        const lines: string[] = []
+        if (plugins.length === 0 && errors.length === 0) {
+          lines.push(`  No plugins installed.`)
+          lines.push(`  Plugin dir: ${loader.getPluginDir()}`)
+          lines.push('')
+          lines.push('  /plugin install <path>   Install a plugin')
+        } else {
+          for (const p of plugins) {
+            const cmds  = (p.commands ?? []).map(c => c.cmd.trim()).join(', ')
+            const tools = (p.tools    ?? []).map(t => t.name).join(', ')
+            lines.push(`  • ${p.name}  v${p.version}${p.description ? '  ' + p.description : ''}`)
+            if (cmds)  lines.push(`    commands : ${cmds}`)
+            if (tools) lines.push(`    tools    : ${tools}`)
+          }
+          for (const e of errors) lines.push(`  ✗ ${e.file}: ${e.error}`)
+        }
+        addMsg({ type: 'command', commandTitle: 'plugins', content: lines.join('\n') })
+      } else if (sub === 'install') {
+        if (!arg) { addMsg({ type: 'error', content: 'Usage: /plugin install <path>' }); cm.addHistory(input); setHistory(cm.getHistory()); return }
+        setAgentStatus('thinking')
+        const result = await loader.install(arg)
+        setAgentStatus('idle')
+        if (result.ok) {
+          setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+          addMsg({ type: 'done', content: `Plugin "${result.name}" installed successfully` })
+        } else {
+          addMsg({ type: 'error', content: `Install failed: ${result.error}` })
+        }
+      } else if (sub === 'remove') {
+        if (!arg) { addMsg({ type: 'error', content: 'Usage: /plugin remove <name>' }); cm.addHistory(input); setHistory(cm.getHistory()); return }
+        setAgentStatus('thinking')
+        const result = await loader.remove(arg)
+        setAgentStatus('idle')
+        if (result.ok) {
+          setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+          addMsg({ type: 'done', content: `Plugin "${arg}" removed` })
+        } else {
+          addMsg({ type: 'error', content: result.error || 'Remove failed' })
+        }
+      } else if (sub === 'reload') {
+        loader.reload()
+        setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+        addMsg({ type: 'done', content: `Plugins reloaded  (${loader.getAll().length} loaded)` })
+      } else {
+        addMsg({ type: 'error', content: 'Usage: /plugin [list | install <path> | remove <name> | reload]' })
+      }
+      cm.addHistory(input); setHistory(cm.getHistory()); return
+    }
+
+    // ── Plugin slash-command routing ──────────────────────────────────────────
+    if (input.startsWith('/')) {
+      const commands = PluginLoader.getInstance().getCommands()
+      const trimmed  = input.trim()
+      const matched  = commands.find(c => {
+        const key = c.cmd.trimEnd()
+        return trimmed === key || trimmed.startsWith(key + ' ')
+      })
+      if (matched) {
+        const key  = matched.cmd.trimEnd()
+        const args = trimmed.slice(key.length).trim()
+        setAgentStatus('thinking')
+        try {
+          const result = await matched.handler(args, { cwd })
+          setAgentStatus('idle')
+          if (result.type === 'error') {
+            addMsg({ type: 'error', content: result.content })
+          } else if (result.type === 'command') {
+            addMsg({ type: 'command', commandTitle: result.title, content: result.content })
+          } else {
+            addMsg({ type: 'done', content: result.content })
+          }
+        } catch (e) {
+          setAgentStatus('idle')
+          addMsg({ type: 'error', content: `Plugin error: ${String(e)}` })
+        }
+        cm.addHistory(input); setHistory(cm.getHistory()); return
+      }
+    }
+
     switch (input.trim().toLowerCase()) {
       case 'exit': case 'quit': exit(); return
       case 'clear': setMessages([]); return
@@ -713,6 +812,12 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           '',
           '**Shell**',
           '  $ <cmd>   or   ! <cmd>         e.g.: $ npm test',
+          '',
+          '**Plugins**',
+          '  /plugin                        List installed plugins',
+          '  /plugin install <path>         Install plugin from directory or .js file',
+          '  /plugin remove <name>          Uninstall a plugin',
+          '  /plugin reload                 Reload all plugins',
         ].join('\n') })
         break
       case 'doctor': {
