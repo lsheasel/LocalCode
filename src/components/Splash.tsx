@@ -137,6 +137,8 @@ export const Splash: React.FC<Props> = ({ config, history, onSubmit }) => {
       <Box paddingLeft={2} marginTop={1}>
         <Text color="#4B5563">↑↓ </Text>
         <Text color="#6B7280">history  </Text>
+        <Text color="#4B5563">PgUp/PgDn </Text>
+        <Text color="#6B7280">scroll  </Text>
         <Text color="#4B5563">@ </Text>
         <Text color="#6B7280">attach  </Text>
         <Text color="#4B5563">ctrl+c </Text>

@@ -39,7 +39,7 @@ export class AgentRuntime extends EventEmitter {
     this.injectionQueue.push(message)
   }
 
-  async run(instruction: string, cwd?: string, attachments: Attachment[] = [], mode: 'build' | 'plan' = 'build'): Promise<void> {
+  async run(instruction: string, cwd?: string, attachments: Attachment[] = [], mode: 'build' | 'plan' = 'build', history: Message[] = []): Promise<void> {
     this.aborted = false
     const config = ConfigManager.getInstance().get()
     const workDir = cwd || config.workspaceDir || os.homedir()
@@ -128,6 +128,7 @@ export class AgentRuntime extends EventEmitter {
 
     const messages: Message[] = [
       { role: 'system', content: AGENT_SYSTEM_PROMPT + pluginSection },
+      ...history,
       { role: 'user', content: userContent, ...(images.length ? { images } : {}) },
     ]
 

@@ -402,18 +402,19 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const [attachments, setAttachments]     = useState<Attachment[]>([])
   const [mode, setMode]                   = useState<'build' | 'plan'>('build')
   const [pluginCmds, setPluginCmds]       = useState<Array<{ cmd: string; description: string }>>([])
+  const [convHistory, setConvHistory]     = useState<import('./shared/types').Message[]>([])
 
-
-  const agentRef = useRef<AgentRuntime | null>(null)
-  const ptyRef   = useRef<PtyManager | null>(null)
+  const agentRef      = useRef<AgentRuntime | null>(null)
+  const ptyRef        = useRef<PtyManager | null>(null)
+  const hiddenAboveRef = useRef(0)
 
   const [termRows, setTermRows] = useState(process.stdout.rows || 24)
   const [termCols, setTermCols] = useState(process.stdout.columns || 80)
 
   // Stable ref that holds the latest state values — lets handleSubmit (useCallback)
   // always read fresh values without changing its identity every render.
-  const s = useRef({ agentStatus, isRunning: false, attachments, mode, pickerIdx, messages })
-  s.current = { agentStatus, isRunning: agentStatus === 'thinking' || agentStatus === 'running', attachments, mode, pickerIdx, messages }
+  const s = useRef({ agentStatus, isRunning: false, attachments, mode, pickerIdx, messages, convHistory })
+  s.current = { agentStatus, isRunning: agentStatus === 'thinking' || agentStatus === 'running', attachments, mode, pickerIdx, messages, convHistory }
 
   const showSplash = messages.length === 0 && agentStatus === 'idle' && !confirm
 
@@ -434,19 +435,6 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     return () => { process.stdout.off('resize', onResize) }
   }, [])
 
-  // Mouse wheel scroll — raw stdin listener (fires before readline processes the bytes)
-  useEffect(() => {
-    const onData = (data: Buffer) => {
-      const str = data.toString()
-      const m = str.match(/\x1b\[<(\d+);\d+;\d+[Mm]/)
-      if (!m) return
-      const btn = parseInt(m[1])
-      if (btn === 64) setScrollOffset(o => o + 3)
-      if (btn === 65) setScrollOffset(o => Math.max(0, o - 3))
-    }
-    process.stdin.on('data', onData)
-    return () => { process.stdin.off('data', onData) }
-  }, [])
 
   useEffect(() => {
     try { ptyRef.current = new PtyManager(cwd, cm.get().shell) } catch {}
@@ -567,7 +555,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
     // ── exit / clear (also without slash) ────────────────────────────────────
     if (input === '/exit' || input === 'exit' || input === 'quit') { exit(); return }
-    if (input === '/clear' || input === 'clear') { setMessages([]); return }
+    if (input === '/clear' || input === 'clear') { setMessages([]); setConvHistory([]); return }
 
     // ── /lsp ──────────────────────────────────────────────────────────────────
     if (input === '/lsp' || input.startsWith('/lsp ')) {
@@ -626,6 +614,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       setCurrentTokens('')
       setAgentStatus('idle')
       setMessages([])
+      setConvHistory([])
       addMsg({ type: 'done', content: `[Compacted]\n${compacted}` })
       return
     }
@@ -944,9 +933,16 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
             addMsg({ type: 'error', content: 'Stopped.' })
           } else if (response) {
             addMsg({ type: 'done', content: response })
+            // Append this turn to conversation history (keep last 20 msgs = 10 turns)
+            setConvHistory(prev => [
+              ...prev,
+              { role: 'user' as const, content: cleanInput },
+              { role: 'assistant' as const, content: response },
+            ].slice(-20))
           }
         })
-        agent.run(cleanInput, cwd, allAtts, mode).catch((err: Error) => {
+        const { convHistory } = s.current
+        agent.run(cleanInput, cwd, allAtts, mode, convHistory).catch((err: Error) => {
           setAgentStatus('error')
           addMsg({ type: 'error', content: String(err) })
           agentRef.current = null
@@ -960,17 +956,6 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   }, [addMsg, cwd, exit])
 
   useInput((key, inp) => {
-    // ── Mausrad-Scroll (SGR-Sequenz kommt durch readline als raw input) ──
-    if (key.startsWith('\x1b[<')) {
-      const m = key.match(/\x1b\[<(\d+)/)
-      if (m) {
-        const btn = parseInt(m[1])
-        if (btn === 64) { setScrollOffset(o => o + 3); return }
-        if (btn === 65) { setScrollOffset(o => Math.max(0, o - 3)); return }
-      }
-      return
-    }
-
     // ── Wenn Popup offen: nur Ctrl+C durchlassen, Rest übernimmt Popup ──
     if (connectPopup || modelPicker || filePicker) {
       if (inp.ctrl && key === 'c') {
@@ -1013,14 +998,10 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       if (inp.tab && !suggestion) { setMode(m => m === 'build' ? 'plan' : 'build'); return }
       if (inp.tab && suggestion)  { setInputValue(inputValue + suggestion); return }
       if (inp.upArrow) {
-        // Empty input → scroll up; otherwise navigate history
-        if (inputValue === '') { setScrollOffset(o => o + 3); return }
         const next = Math.min(histIndex + 1, history.length - 1)
         setHistIndex(next); if (history[next]) setInputValue(history[next]); return
       }
       if (inp.downArrow) {
-        // Scrolled up + empty input → scroll back down; otherwise navigate history
-        if (inputValue === '' && scrollOffset > 0) { setScrollOffset(o => Math.max(0, o - 3)); return }
         const next = Math.max(histIndex - 1, -1)
         setHistIndex(next); setInputValue(next === -1 ? '' : history[next] || ''); return
       }
@@ -1063,35 +1044,35 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       ) : (
         /* ── Chat view ── */
         <>
-          {/* Spacer — drückt alles nach unten, kein overflow nötig */}
-          <Box flexGrow={1} />
+          <Box flexGrow={1} flexShrink={1} />
 
-          {/* Nur so viele Turns rendern wie in den verfügbaren Raum passen + Scroll */}
           {(() => {
             const pickerH   = showPicker ? slashCmds.length + 3 : 0
-            const streamH   = (currentTokens || isRunning) ? 2 : 0
+            const streamH   = (currentTokens || isRunning) ? (currentTokens.includes('<think>') ? 5 : 2) : 0
             const attachH   = attachments.length > 0 ? 1 : 0
             const confirmDiffH = confirm?.diffPreview
               ? (confirm.diffPreview.contextBefore.length + confirm.diffPreview.oldLines.length +
                  confirm.diffPreview.newLines.length + confirm.diffPreview.contextAfter.length + 4)
               : 0
             const confirmH  = confirm ? 1 + confirmDiffH : 0
-            const INPUT_H   = 4 + attachH
-            const STATUS_H  = 1
-            const SCROLL_H  = 1  // Indikator-Zeile reservieren
-            const reserved  = INPUT_H + STATUS_H + pickerH + streamH + confirmH + SCROLL_H
+            const reserved  = (4 + attachH) + 1 + pickerH + streamH + confirmH + 1 + 2
             const available = Math.max(2, termRows - reserved)
             const innerW    = Math.max(20, termCols - 8)
             const allTurns  = groupIntoTurns(messages)
-            // clamp scrollOffset
             const safeOffset = Math.min(scrollOffset, Math.max(0, allTurns.length - 1))
             const { visible, hiddenAbove, hiddenBelow } = getVisibleTurns(allTurns, available, innerW, safeOffset)
+            hiddenAboveRef.current = hiddenAbove
 
             return (
               <>
                 {/* Scroll-Indikator oben */}
                 {hiddenAbove > 0
-                  ? <Box paddingX={2}><Text color="#374151">↑ PageUp  </Text><Text color="#4B5563">{hiddenAbove} older messages</Text></Box>
+                  ? (
+                    <Box paddingX={1} marginBottom={0}>
+                      <Text backgroundColor="#92400E" color="#FEF3C7"> ↑ PageUp </Text>
+                      <Text color="#F59E0B" bold>  {hiddenAbove} older messages hidden above</Text>
+                    </Box>
+                  )
                   : <Text> </Text>
                 }
 
@@ -1103,7 +1084,10 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
                 {/* Scroll-Indikator unten (wenn nach oben gescrollt) */}
                 {hiddenBelow > 0 && (
-                  <Box paddingX={2}><Text color="#374151">↓ PageDown  </Text><Text color="#4B5563">{hiddenBelow} newer messages</Text></Box>
+                  <Box paddingX={1}>
+                    <Text backgroundColor="#1E3A5F" color="#BFDBFE"> ↓ PageDown </Text>
+                    <Text color="#60A5FA" bold>  {hiddenBelow} newer messages below</Text>
+                  </Box>
                 )}
               </>
             )
@@ -1286,6 +1270,13 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                     <Text color="#6B7280">{suggestion ? 'complete' : 'switch mode'}  </Text>
                     <Text color="#4B5563">@ </Text>
                     <Text color="#6B7280">attach</Text>
+                    {hiddenAboveRef.current > 0 && (
+                      <>
+                        <Text color="#4B5563">  │  </Text>
+                        <Text color="#F59E0B">↑ PgUp </Text>
+                        <Text color="#D97706">{hiddenAboveRef.current} hidden</Text>
+                      </>
+                    )}
                   </>
                 )}
               </Box>

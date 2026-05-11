@@ -1,6 +1,7 @@
 import React from 'react'
 import { render } from 'ink'
 import chalk from 'chalk'
+import { Transform, TransformCallback } from 'stream'
 import { App } from '../app'
 import { ConfigManager } from '../config/ConfigManager'
 
@@ -67,21 +68,65 @@ const useAltScreen = process.stdout.isTTY
 function enterAltScreen(): void {
   if (!useAltScreen) return
   process.stdout.write(
-    '\x1B[?1049h' + // enter alternate screen buffer
-    '\x1B[2J'    + // clear screen
-    '\x1B[3J'    + // clear scrollback
-    '\x1B[H'     + // move cursor to top-left
-    '\x1b[?1000h\x1b[?1006h' // enable SGR mouse tracking (scroll events)
+    '\x1B[?1049h'       + // enter alternate screen buffer
+    '\x1B[2J'           + // clear screen
+    '\x1B[3J'           + // clear scrollback
+    '\x1B[H'            + // move cursor to top-left
+    '\x1B[?1000h'       + // enable mouse button tracking
+    '\x1B[?1006h'         // enable SGR extended mouse coordinates
   )
 }
 
 function exitAltScreen(): void {
   if (!useAltScreen) return
   process.stdout.write(
-    '\x1b[?1006l\x1b[?1000l' + // disable mouse tracking
-    '\x1B[?1049l'               // exit alternate screen
+    '\x1B[?1006l'  + // disable SGR mouse
+    '\x1B[?1000l'  + // disable mouse tracking
+    '\x1B[?1049l'    // exit alternate screen
   )
 }
+
+// ── Mouse-filtering stdin proxy ────────────────────────────────────────────
+// SGR mouse tracking sends \x1b[<btn;col;rowM sequences. readline doesn't
+// recognise them — it consumes the ESC separately and emits the rest as text,
+// which leaks into the input field. We filter at the raw byte level (before
+// readline sees anything) by piping stdin through a Transform that:
+//   • scroll-wheel up  (btn 64) → \x1b[5~ (PageUp)
+//   • scroll-wheel down (btn 65) → \x1b[6~ (PageDown)
+//   • all other mouse events     → dropped
+
+class MouseFilterStream extends Transform {
+  readonly isTTY: boolean | undefined
+
+  constructor() {
+    super()
+    this.isTTY = process.stdin.isTTY
+  }
+
+  setRawMode(mode: boolean): this {
+    (process.stdin as NodeJS.ReadStream).setRawMode?.(mode)
+    return this
+  }
+
+  ref(): this   { (process.stdin as any).ref?.();   return this }
+  unref(): this { (process.stdin as any).unref?.(); return this }
+
+  _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
+    // Work in binary (Latin-1) so single-byte ops don't mangle multi-byte chars
+    const str      = chunk.toString('binary')
+    const filtered = str.replace(/\x1b\[<(\d+);\d+;\d+[Mm]/g, (_, btnStr: string) => {
+      const btn = parseInt(btnStr, 10)
+      if (btn === 64) return '\x1b[5~'  // scroll up   → PageUp
+      if (btn === 65) return '\x1b[6~'  // scroll down → PageDown
+      return ''                          // discard other mouse events
+    })
+    if (filtered.length > 0) this.push(Buffer.from(filtered, 'binary'))
+    cb()
+  }
+}
+
+const stdinProxy = new MouseFilterStream()
+process.stdin.pipe(stdinProxy)
 
 // Restore terminal on any unexpected exit
 process.on('exit', exitAltScreen)
@@ -95,8 +140,9 @@ enterAltScreen()
 const { waitUntilExit } = render(
   React.createElement(App, { initialCommand, cwd }),
   {
+    stdin: stdinProxy as unknown as NodeJS.ReadStream,
     exitOnCtrlC: false,
-    patchConsole: true, // prevent stray console.log from breaking layout
+    patchConsole: true,
   }
 )
 
