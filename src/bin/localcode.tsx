@@ -4,14 +4,16 @@ import chalk from 'chalk'
 import { App } from '../app'
 import { ConfigManager } from '../config/ConfigManager'
 import { discordPresence } from '../discord/DiscordPresence'
+import { getAppVersion } from '../shared/version'
 
 const args = process.argv.slice(2)
 const cwd = process.cwd()
+const appVersion = getAppVersion()
 
 // ── Flags ──────────────────────────────────────────────────────────────────
 if (args.includes('--help') || args.includes('-h')) {
   process.stdout.write(`
-${chalk.bold.blue('⚡ LocalCode')} ${chalk.gray('v0.1.10')} ${chalk.gray('— Futuristic AI Developer Terminal')}
+${chalk.bold.blue('⚡ LocalCode')} ${chalk.gray(`v${appVersion}`)} ${chalk.gray('— Futuristic AI Developer Terminal')}
 
 ${chalk.bold('Usage:')}
   ${chalk.blue('localcode')}                        Start interactive TUI
@@ -34,7 +36,7 @@ ${chalk.bold('Config:')}  ~/.localcode/config.json
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  process.stdout.write('0.1.0\n')
+  process.stdout.write(`${appVersion}\n`)
   process.exit(0)
 }
 

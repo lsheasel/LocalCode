@@ -6,8 +6,11 @@ import { join } from 'path'
 import * as os from 'os'
 import { ToolResult } from '../../shared/types'
 import { decodeContent } from './decoders'
+import { getAppVersion } from '../../shared/version'
 
 const execAsync = promisify(exec)
+const appVersion = getAppVersion()
+const userAgent = `Mozilla/5.0 (compatible; LocalCode/${appVersion})`
 
 function findChrome(): string | null {
   const candidates = process.platform === 'win32' ? [
@@ -106,7 +109,7 @@ function friendlyFetchError(err: unknown, url: string): string {
 
 async function fetchPageContent(url: string, format = 'text'): Promise<{ text: string; imageB64?: string }> {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LocalCode/1.0)' },
+    headers: { 'User-Agent': userAgent },
     signal: AbortSignal.timeout(15000),
   })
   if (!res.ok && res.status !== 304) {
