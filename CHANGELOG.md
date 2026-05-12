@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.2.0...localcode-agent-v0.3.0) (2026-05-12)
+
+
+### Features
+
+* implement plugin system with dynamic loading and management ([5467f9a](https://github.com/lsheasel/LocalCode/commit/5467f9a6a5f87b20282231efc1b08858fe64eea5))
+
 ## [0.2.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.1.10...localcode-agent-v0.2.0) (2026-05-12)
 
 
