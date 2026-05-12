@@ -11,7 +11,7 @@ const cwd = process.cwd()
 // ── Flags ──────────────────────────────────────────────────────────────────
 if (args.includes('--help') || args.includes('-h')) {
   process.stdout.write(`
-${chalk.bold.blue('⚡ LocalCode')} ${chalk.gray('v0.1.0')} ${chalk.gray('— Futuristic AI Developer Terminal')}
+${chalk.bold.blue('⚡ LocalCode')} ${chalk.gray('v0.1.10')} ${chalk.gray('— Futuristic AI Developer Terminal')}
 
 ${chalk.bold('Usage:')}
   ${chalk.blue('localcode')}                        Start interactive TUI

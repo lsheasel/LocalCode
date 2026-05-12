@@ -10,15 +10,28 @@ interface Props {
 }
 
 const TOOL_ICONS: Record<string, string> = {
-  run_shell: '⚡',
-  read_file: '▸',
-  write_file: '✎',
-  edit_file: '∿',
-  list_files: '▤',
+  run_shell:    '⚡',
+  read_file:    '▸',
+  write_file:   '✎',
+  append_file:  '✎',
+  edit_file:    '∿',
+  delete_file:  '✗',
+  move_file:    '→',
+  copy_file:    '⊕',
+  create_dir:   '⊞',
+  list_files:   '▤',
+  find_files:   '⊙',
   search_files: '⊕',
-  git_status: '⎇',
-  git_diff: '±',
-  git_commit: '◆',
+  git_status:   '⎇',
+  git_diff:     '±',
+  git_log:      '◎',
+  git_commit:   '◆',
+  git_branch:   '⎇',
+  git_stash:    '◈',
+  run_tests:    '▶',
+  web_fetch:    '◉',
+  http_request: '◉',
+  lsp_check:    '⊛',
 }
 
 export const ToolCallCard: React.FC<Props> = ({ toolCall, result, blocked, blockReason }) => {
@@ -26,11 +39,31 @@ export const ToolCallCard: React.FC<Props> = ({ toolCall, result, blocked, block
 
   const argSummary = (() => {
     const a = toolCall.arguments
-    if (toolCall.tool === 'run_shell') return String(a.command || '')
-    if (['read_file', 'write_file', 'edit_file'].includes(toolCall.tool)) return String(a.path || '')
-    if (toolCall.tool === 'list_files') return String(a.path || '.')
-    if (toolCall.tool === 'search_files') return `"${a.pattern}" in ${a.path || '.'}`
-    return JSON.stringify(a).slice(0, 50)
+    switch (toolCall.tool) {
+      case 'run_shell':    return String(a.command || '')
+      case 'read_file':
+      case 'write_file':
+      case 'edit_file':
+      case 'append_file':
+      case 'delete_file':  return String(a.path || '')
+      case 'move_file':
+      case 'copy_file':    return `${String(a.from || '')} → ${String(a.to || '')}`
+      case 'create_dir':   return String(a.path || '')
+      case 'list_files':   return String(a.path || '.')
+      case 'find_files':   return `"${String(a.pattern || '')}" in ${String(a.path || '.')}`
+      case 'search_files': return `"${String(a.pattern || '')}" in ${String(a.path || '.')}`
+      case 'git_status':   return ''
+      case 'git_diff':     return a.staged ? 'staged' : ''
+      case 'git_log':      return `last ${String(a.limit || 20)}`
+      case 'git_commit':   return String(a.message || '')
+      case 'git_branch':   return `${String(a.action || 'list')}${a.name ? ` ${String(a.name)}` : ''}`
+      case 'git_stash':    return `${String(a.action || 'push')}${a.message ? ` "${String(a.message)}"` : ''}`
+      case 'run_tests':    return ''
+      case 'web_fetch':    return String(a.url || '')
+      case 'http_request': return `${String(a.method || 'GET')} ${String(a.url || '')}`
+      case 'lsp_check':    return String(a.path || '.')
+      default:             return JSON.stringify(a).slice(0, 50)
+    }
   })()
 
   return (
@@ -38,8 +71,8 @@ export const ToolCallCard: React.FC<Props> = ({ toolCall, result, blocked, block
       <Box>
         <Text color={blocked ? '#EF4444' : '#2563EB'}>{blocked ? '⊘' : icon} </Text>
         <Text color={blocked ? '#EF4444' : '#3B82F6'} bold>{toolCall.tool}</Text>
-        <Text color="#374151"> › </Text>
-        <Text color="#9CA3AF">{argSummary.slice(0, 70)}</Text>
+        {argSummary && <Text color="#374151"> › </Text>}
+        {argSummary && <Text color="#9CA3AF">{argSummary.slice(0, 70)}</Text>}
         {!result && !blocked && <Text color="#F59E0B"> ⟳</Text>}
       </Box>
 

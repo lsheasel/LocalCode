@@ -21,7 +21,7 @@ export const Header: React.FC<Props> = ({ config, cwd }) => {
       <Box>
         <Text bold color="#3B82F6"> ⚡ LocalCode </Text>
         <Text color="#1E3A8A">│ </Text>
-        <Text color="#374151">v0.1.0 </Text>
+        <Text color="#374151">v0.1.10 </Text>
         <Text color="#1E3A8A">│ </Text>
         <Text color="#6B7280">🤖 {modelLabel} </Text>
         <Text color="#1E3A8A">│ </Text>

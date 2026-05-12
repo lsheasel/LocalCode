@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import { COMMAND_SUGGESTIONS, BUILTIN_COMMANDS } from '../shared/constants'
@@ -23,9 +23,15 @@ function getSuggestion(input: string, history: string[]): string {
 export const InputBar: React.FC<Props> = ({ onSubmit, isAgentRunning, history }) => {
   const [value, setValue] = useState('')
   const [histIndex, setHistIndex] = useState(-1)
+  const [cols, setCols] = useState(process.stdout.columns || 80)
+
+  useEffect(() => {
+    const handleResize = () => setCols(process.stdout.columns || 80)
+    process.stdout.on('resize', handleResize)
+    return () => { process.stdout.off('resize', handleResize) }
+  }, [])
 
   const suggestion = isAgentRunning ? '' : getSuggestion(value, history)
-  const cols = process.stdout.columns || 80
 
   useInput((_ch, key) => {
     if (key.tab && suggestion && !isAgentRunning) {
@@ -58,7 +64,7 @@ export const InputBar: React.FC<Props> = ({ onSubmit, isAgentRunning, history })
   }, [])
 
   const promptColor = isAgentRunning ? '#F59E0B' : '#3B82F6'
-  const promptChar = isAgentRunning ? '⟳' : '›'
+  const promptChar  = isAgentRunning ? '⟳' : '›'
 
   return (
     <Box flexDirection="column">

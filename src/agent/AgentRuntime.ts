@@ -18,6 +18,7 @@ const CONVERSATIONAL = /^(hi|hey|hello|sup|yo|hallo|hej|ciao|howdy|how are you|w
 const READ_ONLY_TOOLS = new Set([
   'read_file', 'list_files', 'find_files', 'search_files',
   'git_status', 'git_diff', 'git_log', 'lsp_check',
+  'run_tests', 'web_fetch',
 ])
 
 export class AgentRuntime extends EventEmitter {
@@ -337,6 +338,9 @@ function toolCallReason(tc: ToolCall): string {
     case 'git_diff':      return 'git diff'
     case 'git_log':       return `git log (last ${String(a.limit || 20)})`
     case 'git_commit':    return `git commit: ${String(a.message || '')}`
+    case 'git_branch':    return `git branch ${String(a.action || 'list')}${a.name ? ` ${String(a.name)}` : ''}`
+    case 'git_stash':     return `git stash ${String(a.action || 'push')}${a.message ? ` "${String(a.message)}"` : ''}`
+    case 'run_tests':     return 'Run tests'
     case 'web_fetch':     return `Fetch URL: ${String(a.url || '')}`
     case 'http_request':  return `${String(a.method || 'GET')} ${String(a.url || '')}`
     case 'lsp_check':     return `LSP check: ${String(a.path || '.')}`

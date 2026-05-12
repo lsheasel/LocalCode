@@ -237,6 +237,9 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({ msg, maxLi
           case 'git_diff':      return 'git diff'
           case 'git_log':       return 'git log'
           case 'git_commit':    return `git commit  "${String(a.message || '').slice(0, 40)}"`
+          case 'git_branch':    return `git branch  ${String(a.action || 'list')}${a.name ? `  ${tp(a.name)}` : ''}`
+          case 'git_stash':     return `git stash  ${String(a.action || 'push')}${a.message ? `  "${String(a.message).slice(0, 30)}"` : ''}`
+          case 'run_tests':     return 'run tests'
           case 'web_fetch':     return `fetch  ${tp(a.url)}`
           case 'http_request':  return `${a.method || 'GET'}  ${tp(a.url)}`
           case 'lsp_check':     return `lsp  ${tp(a.path || '.')}`
@@ -282,7 +285,7 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({ msg, maxLi
         .replace(/```json[\s\S]*?```/gi, '')
         .replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?\}/g, '')
         .replace(/\s*DONE:\s*<[^>]*>/gi, '')
-        .replace(/\s*DONE:\s*.*/gi, '')
+        .replace(/(?:^|\n)DONE:\s*/gi, '\n')
         .trim()
       if (!clean) return null
       if (maxLines) {
@@ -433,6 +436,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
   const agentRef       = useRef<AgentRuntime | null>(null)
   const ptyRef         = useRef<PtyManager | null>(null)
   const hiddenAboveRef = useRef(0)
+  const toolMsgsRef    = useRef<import('./shared/types').Message[]>([])
   // Token buffering: accumulate in a ref, flush to state at most every 100 ms
   // so the terminal doesn't repaint on every single token (ruins text selection).
   const tokenBufRef    = useRef('')
@@ -974,9 +978,10 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
         const agent = new AgentRuntime()
         agentRef.current = agent
 
-        // Reset token buffer for this run
+        // Reset token buffer and tool message log for this run
         tokenBufRef.current = ''
         tokenCntRef.current = 0
+        toolMsgsRef.current = []
         if (tokenFlushRef.current) { clearTimeout(tokenFlushRef.current); tokenFlushRef.current = null }
 
         const flushTokens = () => {
@@ -988,16 +993,31 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
         agent.on('thinking', () => { setAgentStatus('thinking'); setCurrentTokens('') })
         agent.on('token', (token: string) => {
           setAgentStatus('running')
+          const wasEmpty = tokenBufRef.current === ''
           tokenBufRef.current += token
           tokenCntRef.current += token.length
-          // Schedule a flush at most every 100 ms — reduces repaints so text selection isn't wiped
-          if (!tokenFlushRef.current) tokenFlushRef.current = setTimeout(flushTokens, 100)
+          if (wasEmpty) {
+            // First token: flush immediately so text appears without delay
+            flushTokens()
+          } else if (!tokenFlushRef.current) {
+            // Subsequent tokens: throttle to ~60 fps
+            tokenFlushRef.current = setTimeout(flushTokens, 16)
+          }
         })
         agent.on('tool_call', ({ toolCall }: { toolCall: ToolCall }) => {
           setCurrentTokens('')
           addMsg({ type: 'tool_call', content: toolCall.tool, toolCall })
         })
         agent.on('tool_result', ({ toolCall, result }: { toolCall: ToolCall; result: ToolResult }) => {
+          // Save tool exchange for convHistory so follow-up questions have context
+          const toolCallJson = JSON.stringify({ tool: toolCall.tool, arguments: toolCall.arguments })
+          const toolOut = result.success
+            ? (result.output || '').slice(0, 3000)
+            : `error: ${result.error || 'unknown'}`
+          toolMsgsRef.current.push(
+            { role: 'assistant', content: toolCallJson },
+            { role: 'user',      content: `Tool "${toolCall.tool}" result:\n${toolOut}` },
+          )
           addMsg({ type: 'tool_result', content: '', toolCall, toolResult: result })
         })
         agent.on('confirm_required', ({ toolCall, reason, diffPreview, dangerous }: { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview; dangerous?: boolean }) => {
@@ -1024,8 +1044,9 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
             setConvHistory(prev => [
               ...prev,
               { role: 'user' as const, content: cleanInput },
+              ...toolMsgsRef.current,
               { role: 'assistant' as const, content: response },
-            ].slice(-40))
+            ].slice(-60))
           }
           // Run next queued task if any (only when not aborted)
           if (!aborted && taskQueueRef.current.length > 0) {
@@ -1172,7 +1193,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
         /* ── Splash: fills terminal, status bar at bottom ── */
         <>
           <Box flexGrow={1} alignItems="center" justifyContent="center">
-            <Splash config={config} history={history} mode={mode} onSubmit={handleSubmit} onToggleMode={() => setMode(m => m === 'build' ? 'plan' : 'build')} />
+            <Splash config={config} history={history} mode={mode} onSubmit={handleSubmit} onToggleMode={() => setMode(m => m === 'build' ? 'plan' : 'build')} termRows={termRows} />
           </Box>
           <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} mode={mode} />
         </>
@@ -1231,11 +1252,11 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
           {/* Live streaming block — height-capped so input is never pushed off */}
           {(currentTokens || (isRunning && !currentTokens)) && (() => {
             const { thinking, response, stillThinking } = parseThinking(currentTokens)
-            // Strip everything from where a tool-call JSON starts (complete or mid-stream)
+            // Strip tool-call JSON and DONE: marker (keep the text after it)
             let cleanResponse = response.replace(/```json[\s\S]*?```/gi, '')
             const toolIdx = cleanResponse.search(/\{[\s\S]*?"tool"\s*:/)
             if (toolIdx !== -1) cleanResponse = cleanResponse.slice(0, toolIdx)
-            cleanResponse = cleanResponse.trim()
+            cleanResponse = cleanResponse.replace(/(?:^|\n)DONE:\s*/gi, '\n').trim()
 
             // Use pre-computed maxStreamLines and innerStreamW (same values used in layout budget)
             const srcLines = cleanResponse.split('\n')
@@ -1262,7 +1283,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
                     {thinkLines.map((line, i) => (
                       <Box key={i}>
                         <Text color="#3B82F6">  │ </Text>
-                        <Text color="#4B5563" italic>{line.slice(0, innerStreamW)}</Text>
+                        <Text color="#4B5563" dimColor italic>{line.slice(0, innerStreamW)}</Text>
                       </Box>
                     ))}
                   </Box>

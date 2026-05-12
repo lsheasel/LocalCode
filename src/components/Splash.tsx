@@ -54,14 +54,17 @@ interface Props {
   mode: 'build' | 'plan'
   onSubmit: (v: string) => void
   onToggleMode: () => void
+  termRows: number
 }
 
-export const Splash: React.FC<Props> = ({ config, history, mode, onSubmit, onToggleMode }) => {
+export const Splash: React.FC<Props> = ({ config, history, mode, onSubmit, onToggleMode, termRows }) => {
   const [value, setValue] = useState('')
   const [histIdx, setHistIdx] = useState(-1)
 
   const tip = TIPS[new Date().getDate() % TIPS.length]
   const suggestion = getSuggestion(value, history)
+  const topPad = Math.max(1, Math.floor(termRows / 2) - 10)
+  const isPlan = mode === 'plan'
 
   useInput((_ch, key) => {
     if (key.tab) {
@@ -89,9 +92,6 @@ export const Splash: React.FC<Props> = ({ config, history, mode, onSubmit, onTog
     onSubmit(v.trim())
     setValue('')
   }, [onSubmit])
-
-  const topPad = Math.max(1, Math.floor((process.stdout.rows || 24) / 2) - 10)
-  const isPlan = mode === 'plan'
 
   return (
     <Box flexDirection="column" alignItems="center">
