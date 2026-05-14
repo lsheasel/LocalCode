@@ -350,6 +350,11 @@ function toolCallReason(tc: ToolCall): string {
 
 function extractDoneSummary(text: string): string {
   let s = text
+  // Strip thinking blocks first (provider may omit opening tag, keep closing tag)
+  s = s.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  if (s.includes('</thinking>')) s = s.replace(/^[\s\S]*<\/thinking>\s*/i, '')
+  if (s.includes('</think>')) s = s.replace(/^[\s\S]*<\/think>\s*/i, '')
   s = s.replace(/```json[\s\S]*?```/gi, '')
   s = s.replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?"arguments"\s*:[\s\S]*?\}/g, '')
   // If there's text before DONE:, keep only that (model repeated itself after DONE:)

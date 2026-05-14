@@ -85,7 +85,7 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
       nodes.push(
         <Box key={i}>
           <Text color="#6B7280">  • </Text>
-          <Box flexWrap="wrap"><InlinePart text={line.slice(2)} /></Box>
+          <Text wrap="wrap"><InlinePart text={line.slice(2)} /></Text>
         </Box>
       )
     } else if (/^\d+\. /.test(line)) {
@@ -93,7 +93,7 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
       nodes.push(
         <Box key={i}>
           <Text color="#6B7280">  {m[1]}. </Text>
-          <Box flexWrap="wrap"><InlinePart text={m[2]} /></Box>
+          <Text wrap="wrap"><InlinePart text={m[2]} /></Text>
         </Box>
       )
     } else if (/^---+$/.test(line.trim())) {
@@ -101,9 +101,7 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
     } else if (!line.trim()) {
       nodes.push(<Text key={i}>{' '}</Text>)
     } else {
-      nodes.push(
-        <Box key={i} flexWrap="wrap"><InlinePart text={line} /></Box>
-      )
+      nodes.push(<Text key={i} wrap="wrap"><InlinePart text={line} /></Text>)
     }
   }
 

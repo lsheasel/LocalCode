@@ -49,7 +49,7 @@ export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCoun
         <Text color="#374151">{`v${APP_VERSION}`}  </Text>
         <Text color="#6B7280">{cwdDisplay}</Text>
         {branch && <Text color="#4B5563"> ({branch})</Text>}
-        {tokenCount > 0 && <Text color="#374151">  ~{tokenCount}t</Text>}
+        {tokenCount > 0 && <Text color="#374151">  ~{tokenCount} tok</Text>}
       </Box>
 
       {/* Right: agent status + mode badge */}

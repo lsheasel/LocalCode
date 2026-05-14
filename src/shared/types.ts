@@ -50,6 +50,7 @@ export interface AppConfig {
   shell: string
   workspaceDir: string
   trustedPaths: string[]   // paths where write ops are auto-approved (+ all subpaths)
+  disabledPlugins: string[]
   security: {
     allowDangerousCommands: boolean
     requireConfirmation: string[]
@@ -64,4 +65,6 @@ export interface AgentMessage {
   toolCall?: ToolCall
   toolResult?: ToolResult
   timestamp: number
+  tokenCount?: number
+  durationMs?: number
 }

@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   theme: 'dark',
   fontSize: 14,
   trustedPaths: [],
+  disabledPlugins: [],
   shell: process.platform === 'win32'
     ? 'powershell.exe'
     : process.platform === 'darwin'
@@ -232,6 +233,8 @@ export const BUILTIN_COMMANDS = [
   { cmd: '/plugin install ',      description: 'Install plugin from path' },
   { cmd: '/plugin remove ',       description: 'Remove plugin by name' },
   { cmd: '/plugin reload',        description: 'Reload all plugins' },
+  { cmd: '/plugin enable ',       description: 'Enable a disabled plugin' },
+  { cmd: '/plugin disable ',      description: 'Disable a plugin without removing it' },
   { cmd: '/connect',              description: 'Connect to server (popup)' },
   { cmd: '/model',                description: 'Select model (popup)' },
   { cmd: '/attach',               description: 'Attach file or image (@-picker)' },

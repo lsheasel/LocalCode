@@ -22,6 +22,7 @@ import { join } from 'path'
 import * as os from 'os'
 import { createRequire } from 'module'
 import { validateManifest } from './validator.js'
+import { ConfigManager } from '../config/ConfigManager.js'
 import type { ToolRegistry, CommandRegistry } from './registry.js'
 import type { ToolDefinition, PluginCommand, PluginManifest, PluginLoadResult } from '../types/plugin.js'
 
@@ -46,8 +47,10 @@ export async function loadPlugins(
   let entries: string[]
   try { entries = await readdir(PLUGIN_DIR) } catch { return [] }
 
+  const disabled = new Set(ConfigManager.getInstance().listDisabledPlugins())
   const results: PluginLoadResult[] = []
   for (const entry of entries) {
+    if (disabled.has(entry)) continue
     const result = await _loadOne(entry, registry, commandRegistry)
     if (result) results.push(result)
   }
@@ -61,6 +64,9 @@ export async function reloadPlugin(
 ): Promise<PluginLoadResult> {
   registry.removePluginTools(name)
   commandRegistry.removePluginCommands(name)
+  if (ConfigManager.getInstance().isPluginDisabled(name)) {
+    return { name, success: false, error: 'Plugin is disabled' }
+  }
   const pluginPath = join(PLUGIN_DIR, name)
   for (const key of Object.keys(_require.cache ?? {})) {
     if (key.startsWith(pluginPath)) delete (_require.cache as Record<string, unknown>)[key]

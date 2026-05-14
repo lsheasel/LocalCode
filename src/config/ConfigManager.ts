@@ -143,6 +143,29 @@ export class ConfigManager {
     return this.config.trustedPaths ?? []
   }
 
+  // ── Plugin enable/disable ────────────────────────────────────────────────────
+
+  isPluginDisabled(name: string): boolean {
+    return (this.config.disabledPlugins ?? []).includes(name)
+  }
+
+  listDisabledPlugins(): string[] {
+    return this.config.disabledPlugins ?? []
+  }
+
+  disablePlugin(name: string): void {
+    const list = this.config.disabledPlugins ?? []
+    if (!list.includes(name)) {
+      this.config.disabledPlugins = [...list, name]
+      this.save()
+    }
+  }
+
+  enablePlugin(name: string): void {
+    this.config.disabledPlugins = (this.config.disabledPlugins ?? []).filter(n => n !== name)
+    this.save()
+  }
+
   deleteSession(name: string): void {
     try {
       const file = path.join(SESSIONS_DIR, `${name}.json`)

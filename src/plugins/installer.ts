@@ -142,13 +142,15 @@ export interface PluginListEntry {
   tools: string[]
   commands: string[]
   loaded: boolean
+  enabled: boolean
 }
 
-export async function listInstalledPlugins(registry: ToolRegistry): Promise<PluginListEntry[]> {
+export async function listInstalledPlugins(registry: ToolRegistry, disabledPlugins: string[] = []): Promise<PluginListEntry[]> {
   await mkdir(PLUGIN_DIR, { recursive: true })
   let entries: string[]
   try { entries = await readdir(PLUGIN_DIR) } catch { return [] }
 
+  const disabledSet = new Set(disabledPlugins)
   const loadedNames = new Set(
     registry.listTools().map(t => t.pluginName).filter((n): n is string => n !== undefined),
   )
@@ -161,12 +163,14 @@ export async function listInstalledPlugins(registry: ToolRegistry): Promise<Plug
       const m = JSON.parse(await readFile(manifestPath, 'utf-8')) as PluginManifest
       result.push({
         name: m.name, version: m.version, author: m.author, description: m.description,
-        tools: m.tools, commands: m.commands ?? [], loaded: loadedNames.has(m.name),
+        tools: m.tools, commands: m.commands ?? [],
+        loaded: loadedNames.has(m.name),
+        enabled: !disabledSet.has(m.name),
       })
     } catch {
       result.push({
         name: entry, version: '?', author: '?', description: 'Unreadable manifest',
-        tools: [], commands: [], loaded: false,
+        tools: [], commands: [], loaded: false, enabled: !disabledSet.has(entry),
       })
     }
   }
