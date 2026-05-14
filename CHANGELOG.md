@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.3.0...localcode-agent-v0.4.0) (2026-05-14)
+
+
+### Features
+
+* add plugin management functionality ([9cbfd71](https://github.com/lsheasel/LocalCode/commit/9cbfd71fef9c965cf1ad02dea5e5fd7209f799a1))
+
 ## [0.3.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.2.0...localcode-agent-v0.3.0) (2026-05-12)
 
 
