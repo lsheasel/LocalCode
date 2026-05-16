@@ -10,6 +10,7 @@ interface Props {
   agentStatus: 'idle' | 'running' | 'thinking' | 'error'
   tokenCount: number
   mode?: 'build' | 'plan'
+  debugMode?: boolean
 }
 
 const HOME = process.env.HOME || process.env.USERPROFILE || ''
@@ -30,7 +31,7 @@ const AGENT_LABEL: Record<string, string> = {
   idle: '', running: 'RUNNING', thinking: 'THINKING', error: 'ERROR',
 }
 
-export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCount, mode = 'build' }) => {
+export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCount, mode = 'build', debugMode = false }) => {
   const branchRef = useRef('')
   const lastCwdRef = useRef('')
   if (lastCwdRef.current !== cwd) {
@@ -52,8 +53,11 @@ export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCoun
         {tokenCount > 0 && <Text color="#374151">  ~{tokenCount} tok</Text>}
       </Box>
 
-      {/* Right: agent status + mode badge */}
+      {/* Right: debug badge + agent status + mode badge */}
       <Box>
+        {debugMode && (
+          <Text backgroundColor="#7C3AED" color="#EDE9FE"> DEBUG </Text>
+        )}
         {AGENT_LABEL[agentStatus] && (
           <Text backgroundColor={AGENT_COLOR[agentStatus]} color="#BFDBFE"> {AGENT_LABEL[agentStatus]} </Text>
         )}

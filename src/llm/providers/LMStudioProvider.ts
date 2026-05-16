@@ -7,9 +7,10 @@ export class LMStudioProvider {
     messages: Message[],
     config: LLMConfig,
     onToken: (token: string) => void
-  ): Promise<string> {
+  ): Promise<{ response: string; totalTokens?: number }> {
     const baseURL = (config.baseURL || DEFAULT_BASE_URL).replace(/\/$/, '')
     let fullResponse = ''
+    let totalTokens: number | undefined
 
     const response = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
@@ -30,6 +31,7 @@ export class LMStudioProvider {
           }
         }),
         stream: true,
+        stream_options: { include_usage: true },
         temperature: config.temperature ?? 0.1,
         max_tokens: config.maxTokens ?? 8192,
       }),
@@ -55,17 +57,20 @@ export class LMStudioProvider {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         const data = line.slice(6).trim()
-        if (data === '[DONE]') return fullResponse
+        if (data === '[DONE]') return { response: fullResponse, totalTokens }
 
         try {
           const parsed = JSON.parse(data)
           const token = parsed.choices?.[0]?.delta?.content
           if (token) { onToken(token); fullResponse += token }
+          if (parsed.usage?.total_tokens) {
+            totalTokens = parsed.usage.total_tokens
+          }
         } catch {}
       }
     }
 
-    return fullResponse
+    return { response: fullResponse, totalTokens }
   }
 
   async checkHealth(baseURL?: string): Promise<boolean> {

@@ -18,6 +18,7 @@ const CONVERSATIONAL = /^(hi|hey|hello|sup|yo|hallo|hej|ciao|howdy|how are you|w
 const READ_ONLY_TOOLS = new Set([
   'read_file', 'list_files', 'find_files', 'search_files',
   'git_status', 'git_diff', 'git_log', 'lsp_check',
+  'lsp_hover', 'lsp_definition',
   'run_tests', 'web_fetch',
 ])
 
@@ -87,10 +88,11 @@ export class AgentRuntime extends EventEmitter {
         { role: 'user', content: instruction },
       ]
       try {
-        await LLMRouter.stream(msgs, config.llm, (token: string) => {
+        const result = await LLMRouter.stream(msgs, config.llm, (token: string) => {
           this.emit('token', token)
           fullResponse += token
         })
+        fullResponse = result.response || fullResponse
       } catch (err) {
         this.emit('error', friendlyLLMError(err, config.llm))
         this.emit('done', { response: '' })
@@ -109,16 +111,16 @@ export class AgentRuntime extends EventEmitter {
         { role: 'user', content: userContent, ...(images.length ? { images } : {}) },
       ]
       try {
-        await LLMRouter.stream(planMsgs, config.llm, (token: string) => {
+        const result = await LLMRouter.stream(planMsgs, config.llm, (token: string) => {
           this.emit('token', token)
           fullResponse += token
         })
+        fullResponse = result.response || fullResponse
+        this.emit('done', { response: fullResponse, tokenCount: result.totalTokens })
       } catch (err) {
         this.emit('error', friendlyLLMError(err, config.llm))
         this.emit('done', { response: '' })
-        return
       }
-      this.emit('done', { response: fullResponse })
       return
     }
 
@@ -137,6 +139,7 @@ export class AgentRuntime extends EventEmitter {
 
     this.emit('start', { instruction, cwd: workDir })
     this.injectionQueue = []
+    let accumulatedTokens = 0
 
     for (let i = 0; i < MAX_AGENT_ITERATIONS; i++) {
       if (this.aborted) {
@@ -153,6 +156,7 @@ export class AgentRuntime extends EventEmitter {
 
       this.emit('thinking')
       let fullResponse = ''
+      let iterTokens: number | undefined
 
       const MAX_RETRIES = 3
       let lastErr: unknown
@@ -161,10 +165,12 @@ export class AgentRuntime extends EventEmitter {
         if (this.aborted) break
         try {
           fullResponse = ''
-          await LLMRouter.stream(messages, config.llm, (token: string) => {
+          const result = await LLMRouter.stream(messages, config.llm, (token: string) => {
             this.emit('token', token)
             fullResponse += token
           })
+          fullResponse = result.response || fullResponse
+          iterTokens = result.totalTokens
           streamed = true
           break
         } catch (err) {
@@ -183,6 +189,8 @@ export class AgentRuntime extends EventEmitter {
         return
       }
 
+      if (iterTokens) accumulatedTokens += iterTokens
+
       // Abort may have been triggered while streaming — check before acting on the response
       if (this.aborted) {
         this.emit('done', { response: '', aborted: true })
@@ -195,7 +203,7 @@ export class AgentRuntime extends EventEmitter {
 
       if (!toolCall) {
         const clean = extractDoneSummary(fullResponse)
-        this.emit('done', { response: clean })
+        this.emit('done', { response: clean, tokenCount: accumulatedTokens || undefined })
         return
       }
 
@@ -209,7 +217,7 @@ export class AgentRuntime extends EventEmitter {
           const guard = CommandGuard.check(command)
           if (!guard.safe) {
             dangerous = true
-            dangerReason = guard.reason
+            dangerReason = guard.reason ?? ''
           }
         }
 
@@ -236,13 +244,36 @@ export class AgentRuntime extends EventEmitter {
               }
             }
           } catch {}
+        } else if (toolCall.tool === 'write_file') {
+          const filePath = String(toolCall.arguments.path || '')
+          const newContent = String(toolCall.arguments.content || '')
+          try {
+            const oldContent = await readFile(resolve(workDir, filePath), 'utf-8')
+            // Show a simplified diff preview (first changed region)
+            const oldLines = oldContent.split('\n')
+            const newLines = newContent.split('\n')
+            let start = 0
+            while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) start++
+            let oldEnd = oldLines.length - 1, newEnd = newLines.length - 1
+            while (oldEnd > start && newEnd > start && oldLines[oldEnd] === newLines[newEnd]) { oldEnd--; newEnd-- }
+            const CONTEXT = 3
+            diffPreview = {
+              filePath,
+              oldLines: oldLines.slice(start, oldEnd + 1),
+              newLines: newLines.slice(start, newEnd + 1),
+              startLine: start + 1,
+              contextBefore: oldLines.slice(Math.max(0, start - CONTEXT), start),
+              contextAfter: newLines.slice(newEnd + 1, newEnd + 1 + CONTEXT),
+            }
+          } catch {}  // file doesn't exist yet → no preview needed
         }
 
         // Skip confirmation for trusted paths (dangerous ops always require confirm)
         if (!dangerous) {
-          const targetPath = resolve(workDir, String(
-            toolCall.arguments.path || toolCall.arguments.from || toolCall.arguments.command || ''
-          ))
+          // For shell commands there is no file path — check workDir itself
+          const targetPath = toolCall.tool === 'run_shell'
+            ? workDir
+            : resolve(workDir, String(toolCall.arguments.path || toolCall.arguments.from || ''))
           if (ConfigManager.getInstance().isTrusted(targetPath)) {
             // auto-approved — skip dialog
             this.emit('tool_call', { toolCall })
@@ -257,7 +288,7 @@ export class AgentRuntime extends EventEmitter {
             messages.push(toolMsg)
             if (fullResponse.includes('DONE:')) {
               const summary = extractDoneSummary(fullResponse)
-              if (summary) { this.emit('done', { response: summary }); return }
+              if (summary) { this.emit('done', { response: summary, tokenCount: accumulatedTokens || undefined }); return }
             }
             continue
           }
@@ -266,13 +297,10 @@ export class AgentRuntime extends EventEmitter {
         const confirmReason = dangerous ? dangerReason : toolCallReason(toolCall)
         this.emit('confirm_required', { toolCall, reason: confirmReason, diffPreview, dangerous })
         const { confirmed, timedOut, trustFolder } = await this.waitForConfirmation()
-        // If user chose "trust folder", save the path and proceed
+        // If user chose "trust folder", trust the whole working directory
+        // so all subsequent operations (file writes AND shell commands) are auto-approved
         if (confirmed && trustFolder) {
-          const folderPath = resolve(workDir, String(
-            toolCall.arguments.path || toolCall.arguments.from || ''
-          ))
-          const folderDir = /\.[^/\\]+$/.test(folderPath) ? dirname(folderPath) : folderPath
-          ConfigManager.getInstance().trustPath(folderDir)
+          ConfigManager.getInstance().trustPath(workDir)
         }
         if (!confirmed) {
           const result: ToolResult = { success: false, output: '', error: timedOut ? 'Confirmation timed out' : 'Denied by user' }
@@ -305,11 +333,11 @@ export class AgentRuntime extends EventEmitter {
 
       if (fullResponse.includes('DONE:')) {
         const summary = extractDoneSummary(fullResponse)
-        if (summary) { this.emit('done', { response: summary }); return }
+        if (summary) { this.emit('done', { response: summary, tokenCount: accumulatedTokens || undefined }); return }
       }
     }
 
-    this.emit('done', { response: 'Reached maximum iteration limit.' })
+    this.emit('done', { response: 'Reached maximum iteration limit.', tokenCount: accumulatedTokens || undefined })
   }
 
   private waitForConfirmation(): Promise<{ confirmed: boolean; timedOut: boolean; trustFolder: boolean }> {

@@ -42,10 +42,75 @@ export async function writeFileTool(filePath: string, content: string, cwd: stri
   try {
     const dir = dirname(resolved)
     if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+
+    const isNew = !existsSync(resolved)
+    let oldContent = ''
+    if (!isNew) {
+      try { oldContent = await readFile(resolved, 'utf-8') } catch {}
+    }
+
     await writeFile(resolved, content, 'utf-8')
-    return { success: true, output: `Written: ${resolved} (${content.length} chars, ${content.split('\n').length} lines)` }
+
+    // Build diff metadata so the UI can render a DiffView
+    const meta = buildWriteDiff(filePath, oldContent, content, isNew)
+    return { success: true, output: `Written: ${resolved}`, meta }
   } catch (err) {
     return { success: false, output: '', error: friendlyFsError('write', filePath, err) }
+  }
+}
+
+/** Compute a simplified diff between old and new file content for display. */
+function buildWriteDiff(
+  filePath: string,
+  oldContent: string,
+  newContent: string,
+  isNew: boolean,
+): NonNullable<ToolResult['meta']> {
+  const CONTEXT = 3
+  const MAX_LINES = 60  // cap displayed lines for very large files
+
+  if (isNew) {
+    const newLines = newContent.split('\n')
+    const shown = newLines.slice(0, MAX_LINES)
+    return {
+      diffPath: filePath,
+      diffOld: [],
+      diffNew: shown,
+      diffStartLine: 1,
+      diffContextBefore: [],
+      diffContextAfter: [],
+      diffIsNew: true,
+    }
+  }
+
+  const oldLines = oldContent.split('\n')
+  const newLines = newContent.split('\n')
+
+  // Find first differing line (from start)
+  let start = 0
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) {
+    start++
+  }
+
+  // Find first differing line (from end)
+  let oldEnd = oldLines.length - 1
+  let newEnd = newLines.length - 1
+  while (oldEnd > start && newEnd > start && oldLines[oldEnd] === newLines[newEnd]) {
+    oldEnd--
+    newEnd--
+  }
+
+  const contextBefore = oldLines.slice(Math.max(0, start - CONTEXT), start)
+  const contextAfter  = newLines.slice(newEnd + 1, newEnd + 1 + CONTEXT)
+
+  return {
+    diffPath: filePath,
+    diffOld: oldLines.slice(start, oldEnd + 1),
+    diffNew: newLines.slice(start, newEnd + 1),
+    diffStartLine: start + 1,
+    diffContextBefore: contextBefore,
+    diffContextAfter: contextAfter,
+    diffIsNew: false,
   }
 }
 

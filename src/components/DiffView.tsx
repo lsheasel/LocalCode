@@ -8,10 +8,11 @@ interface Props {
   startLine: number
   contextBefore: string[]
   contextAfter: string[]
+  isNew?: boolean
 }
 
 export const DiffView: React.FC<Props> = ({
-  filePath, oldLines, newLines, startLine, contextBefore, contextAfter,
+  filePath, oldLines, newLines, startLine, contextBefore, contextAfter, isNew = false,
 }) => {
   type DiffLine = { type: 'context' | 'removed' | 'added'; content: string; lineNo: number }
   const lines: DiffLine[] = []
@@ -43,8 +44,8 @@ export const DiffView: React.FC<Props> = ({
     <Box flexDirection="column" marginY={0} marginX={1}>
       {/* ── Header ── */}
       <Box>
-        <Text color="#F59E0B">● </Text>
-        <Text color="#E5E7EB">Update(</Text>
+        <Text color={isNew ? "#22C55E" : "#F59E0B"}>● </Text>
+        <Text color="#E5E7EB">{isNew ? "Create(" : "Update("}</Text>
         <Text color="#9CA3AF">{displayPath}</Text>
         <Text color="#E5E7EB">)</Text>
       </Box>

@@ -122,7 +122,9 @@ Type `/` to open the searchable command picker.
 | `/compact` | Summarize and compress the conversation history |
 | `/session save <name>` | Save the current session |
 | `/session load <name>` | Restore a saved session |
-| `/lsp` | Run the project's type checker / linter (tsc, cargo, go vet, pyflakes, eslint) |
+| `/lsp` | Run diagnostics — tsc, eslint, cargo check, go vet, ruff/pyflakes, rubocop, dotnet build |
+| `/lsp hover <file>:<line>:<col>` | Hover info for a symbol via the LSP server (e.g. type, signature, docs) |
+| `/lsp def <file>:<line>:<col>` | Jump to definition — returns the file and line where a symbol is defined |
 | `/plugin` | List installed plugins |
 | `/plugin install <path>` | Install a plugin |
 | `/clear` | Clear the chat |
@@ -215,7 +217,8 @@ It connects automatically to Discord if it is running. No setup needed for users
 - Run any shell command (PowerShell on Windows, bash on Linux/macOS)
 - Create git commits
 - Fetch URLs and make HTTP requests
-- Run LSP diagnostics (tsc, cargo check, go vet, pyflakes, eslint)
+- Run LSP diagnostics (tsc, cargo check, go vet, ruff/pyflakes, eslint, rubocop, dotnet build, and more)
+- Get hover info and jump-to-definition via real LSP servers (typescript-language-server, rust-analyzer, gopls, pylsp, clangd)
 - Retry automatically on errors and try alternative approaches when a tool fails
 
 ---
@@ -252,6 +255,50 @@ Use `/models` to list loaded models, `/model` to switch.
 **TUI looks broken / garbled**  
 Requires a UTF-8 terminal with 256-color support.  
 Use **Windows Terminal** on Windows, or any modern terminal on macOS / Linux (iTerm2, Ghostty, Alacritty, kitty, etc.).
+
+---
+
+## Language Intelligence (LSP)
+
+LocalCode integrates with real **Language Server Protocol** servers to give the agent (and you) IDE-quality language intelligence — the same engine powering VS Code, Neovim, and others.
+
+### What it does
+
+| Feature | Description |
+|---|---|
+| **Diagnostics** (`/lsp`) | Runs errors and warnings via CLI tools (tsc, eslint, cargo check, …) |
+| **Hover** (`/lsp hover`) | Gets the type, signature, or docs for any symbol |
+| **Go-to-definition** (`/lsp def`) | Finds where any symbol is defined |
+
+The agent also has access to `lsp_hover` and `lsp_definition` as tools — it can look up types and definitions on its own while working.
+
+### Supported LSP servers
+
+| Language | Server | Install |
+|---|---|---|
+| TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
+| Rust | `rust-analyzer` | [rust-analyzer.github.io](https://rust-analyzer.github.io) |
+| Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
+| Python | `pylsp` | `pip install python-lsp-server` |
+| C / C++ | `clangd` | [clangd.llvm.org](https://clangd.llvm.org) |
+
+Servers are **optional** — if none is installed for a language, `/lsp` still works via CLI tools. Hover and definition require the LSP server to be installed and on your `PATH`.
+
+### Usage
+
+```
+# Run diagnostics (CLI-based, always works):
+/lsp
+/lsp src/auth.ts
+
+# Hover — get type info for the symbol at line 42, col 15:
+/lsp hover src/auth.ts:42:15
+
+# Go-to-definition — find where a symbol is defined:
+/lsp def src/auth.ts:42:15
+```
+
+LSP servers start automatically on the first request and stay running in the background for fast subsequent calls.
 
 ---
 

@@ -7,7 +7,7 @@ import {
   listFilesTool, findFilesTool, searchFilesTool,
 } from './filesystem'
 import { webFetchTool, httpRequestTool } from './network'
-import { lspCheckTool } from './lsp'
+import { lspCheckTool, lspHoverTool, lspDefinitionTool } from './lsp'
 import { gitBranchTool, gitStashTool, runTestsTool } from './git'
 
 export async function executeTool(toolCall: ToolCall, cwd: string): Promise<ToolResult> {
@@ -83,6 +83,10 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
       // ── LSP / Diagnostics ─────────────────────────────────────────────────────
       case 'lsp_check':
         return lspCheckTool(String(args.path || '.'), cwd)
+      case 'lsp_hover':
+        return lspHoverTool(String(args.path || ''), Number(args.line || 1), Number(args.col || 1), cwd)
+      case 'lsp_definition':
+        return lspDefinitionTool(String(args.path || ''), Number(args.line || 1), Number(args.col || 1), cwd)
 
       default: {
         const regTool = globalRegistry.getTool(tool)

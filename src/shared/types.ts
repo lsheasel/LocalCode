@@ -40,6 +40,7 @@ export interface ToolResult {
     diffStartLine?: number
     diffContextBefore?: string[]
     diffContextAfter?: string[]
+    diffIsNew?: boolean   // true when the file was created (not updated)
   }
 }
 
@@ -51,6 +52,7 @@ export interface AppConfig {
   workspaceDir: string
   trustedPaths: string[]   // paths where write ops are auto-approved (+ all subpaths)
   disabledPlugins: string[]
+  debugMode?: boolean
   security: {
     allowDangerousCommands: boolean
     requireConfirmation: string[]

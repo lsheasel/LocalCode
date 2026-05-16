@@ -59,13 +59,14 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
   {"tool": "read_file", "arguments": {"path": "index.html", "format": "html"}}
   {"tool": "read_file", "arguments": {"path": "data.xml", "format": "xml"}}
 
-- **write_file**: Write/overwrite a file completely
+- **write_file**: Create a brand-new file that does NOT exist yet. NEVER use this to modify an existing file — use edit_file instead.
   {"tool": "write_file", "arguments": {"path": "src/auth.ts", "content": "..."}}
 
 - **append_file**: Append content to a file (creates if missing)
   {"tool": "append_file", "arguments": {"path": "log.txt", "content": "new line\n"}}
 
-- **edit_file**: Targeted search-and-replace inside a file
+- **edit_file**: Targeted search-and-replace inside an existing file. Use this for ALL modifications to existing files — never write_file.
+  The "old" string must match exactly (including whitespace). Use multiple edit_file calls for multiple changes.
   {"tool": "edit_file", "arguments": {"path": "src/auth.ts", "old": "old code", "new": "new code"}}
 
 - **delete_file**: Delete a file or directory
@@ -128,11 +129,21 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
   {"tool": "run_tests", "arguments": {}}
 
 ### LSP / Diagnostics
-- **lsp_check**: Run the project's language checker and return diagnostics.
+- **lsp_check**: Run the project's language checker and return diagnostics (errors + warnings).
   Supported: tsc, eslint, cargo check, go vet, ruff/pyflakes, rubocop, php -l, mvn compile, gradle compile, dotnet build.
   For TypeScript projects with ESLint config, both tsc and eslint run automatically.
   {"tool": "lsp_check", "arguments": {"path": "."}}
   Optional: pass a specific file path to check only that file.
+
+- **lsp_hover**: Get type information or documentation for a symbol at a specific position in a file.
+  Requires an LSP server to be installed: typescript-language-server (TS/JS), rust-analyzer (Rust), gopls (Go), pylsp (Python), clangd (C/C++).
+  Use this when you need to know the type of a variable, function signature, or documentation for a symbol — without reading the whole file.
+  Line and col are 1-indexed.
+  {"tool": "lsp_hover", "arguments": {"path": "src/auth.ts", "line": 42, "col": 15}}
+
+- **lsp_definition**: Jump to the definition of a symbol. Returns the file and line where it is defined.
+  Line and col are 1-indexed.
+  {"tool": "lsp_definition", "arguments": {"path": "src/auth.ts", "line": 42, "col": 15}}
 
 ## Workflow
 
@@ -146,8 +157,9 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
 
 - Always explore before you change anything
 - Make minimal, focused changes
+- **CRITICAL: NEVER use write_file on a file that already exists. Always use edit_file for modifications to existing files.** write_file destroys the whole file and must only be used to create new files.
+- Use multiple edit_file calls for multiple changes in the same file — do NOT read the whole file and rewrite it
 - Use run_shell for directory/file system operations: mkdir, cp, mv, touch, rename, find, etc.
-- Use write_file or edit_file when creating or modifying file contents
 - Never run dangerous commands (rm -rf /, sudo rm, format, shutdown etc.)
 - Adapt shell commands to the current platform: Windows uses PowerShell (New-Item, Remove-Item, Copy-Item, Move-Item, Get-ChildItem), Linux/Mac use bash (mkdir, rm, cp, mv, ls)
 - Current platform: ${process.platform === 'win32' ? 'Windows (PowerShell)' : process.platform === 'darwin' ? 'macOS (bash/zsh)' : 'Linux (bash)'}
@@ -250,8 +262,11 @@ export const BUILTIN_COMMANDS = [
   { cmd: '/config url ',          description: 'Set base URL' },
   { cmd: '/help',                 description: 'Show help' },
   { cmd: '/lsp',                  description: 'Run diagnostics (tsc/eslint/cargo/go vet/ruff/rubocop/dotnet/…)' },
+  { cmd: '/lsp hover ',           description: 'Hover info at file:line:col  (e.g. /lsp hover src/auth.ts:42:15)' },
+  { cmd: '/lsp def ',             description: 'Go-to-definition at file:line:col' },
   { cmd: '/models',               description: 'List available models' },
   { cmd: '/doctor',               description: 'Check system status' },
+  { cmd: '/debug',                description: 'Toggle debug mode — shows full tool args and trust decisions' },
   { cmd: '/clear',                description: 'Clear screen' },
   { cmd: '/exit',                 description: 'Quit' },
 ]

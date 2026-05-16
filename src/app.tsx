@@ -18,6 +18,7 @@ import { ConfigManager } from "./config/ConfigManager";
 import { PtyManager } from "./pty/PtyManager";
 import { LLMRouter } from "./llm/LLMRouter";
 import { lspCheck } from "./lsp/LspRunner";
+import { LspManager } from "./lsp/LspManager";
 import { AgentMessage, ToolCall, ToolResult, Attachment } from "./shared/types";
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from "./shared/constants";
 import {
@@ -268,7 +269,9 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
       const allText = msg.content.trim().replace(/\s+/g, " ");
       if (!allText) return null;
       return (
-        <Text color="#4B5563" dimColor italic wrap="truncate-start">{allText}</Text>
+        <Text color="#4B5563" dimColor italic wrap="truncate-start">
+          {allText}
+        </Text>
       );
     }
     case "text":
@@ -393,6 +396,10 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
             return `${a.method || "GET"}  ${tp(a.url)}`;
           case "lsp_check":
             return `lsp  ${tp(a.path || ".")}`;
+          case "lsp_hover":
+            return `hover  ${tp(a.path)}:${a.line}:${a.col}`;
+          case "lsp_definition":
+            return `def  ${tp(a.path)}:${a.line}:${a.col}`;
           default:
             return msg.toolCall.tool;
         }
@@ -409,7 +416,9 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
     }
     case "tool_result": {
       if (!msg.toolCall) return null;
+      // Suppress inline result for tools that render as DiffView
       if (msg.toolCall.tool === "edit_file") return null;
+      if (msg.toolCall.tool === "write_file" && msg.toolResult?.meta?.diffPath) return null;
       if (!msg.toolResult?.success) {
         const errText = (msg.toolResult?.error || "error").split("\n")[0];
         return (
@@ -447,7 +456,9 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
         </Text>
       );
     case "done": {
-      const { thinking: doneThinking, response: doneResponse } = parseThinking(msg.content);
+      const { thinking: doneThinking, response: doneResponse } = parseThinking(
+        msg.content,
+      );
       let clean = doneResponse
         .replace(/```json[\s\S]*?```/gi, "")
         .replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?\}/g, "")
@@ -456,7 +467,10 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
         .trim();
       if (!clean && !doneThinking) return null;
       const thinkLines = doneThinking
-        ? doneThinking.trim().split("\n").filter((l) => l.trim())
+        ? doneThinking
+            .trim()
+            .split("\n")
+            .filter((l) => l.trim())
         : [];
       if (maxLines) {
         const allLines = clean.split("\n");
@@ -467,7 +481,9 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
           return (
             <Box flexDirection="column">
               {thinkOneLineM ? (
-                <Text color="#4B5563" dimColor italic wrap="truncate-start">{thinkOneLineM}</Text>
+                <Text color="#4B5563" dimColor italic wrap="truncate-start">
+                  {thinkOneLineM}
+                </Text>
               ) : null}
               <Text color="#4B5563">
                 {" "}
@@ -482,7 +498,9 @@ const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
       return (
         <Box flexDirection="column">
           {thinkOneLine ? (
-            <Text color="#4B5563" dimColor italic wrap="truncate-start">{thinkOneLine}</Text>
+            <Text color="#4B5563" dimColor italic wrap="truncate-start">
+              {thinkOneLine}
+            </Text>
           ) : null}
           {clean ? <MarkdownText content={clean} /> : null}
         </Box>
@@ -515,7 +533,7 @@ const AgentBlock: React.FC<{
   for (const msg of messages) {
     if (
       msg.type === "tool_result" &&
-      msg.toolCall?.tool === "edit_file" &&
+      (msg.toolCall?.tool === "edit_file" || msg.toolCall?.tool === "write_file") &&
       msg.toolResult?.meta?.diffPath
     ) {
       flushBuf();
@@ -534,7 +552,7 @@ const AgentBlock: React.FC<{
       (m.type === "text" && m.content && !m.content.startsWith("> ")) ||
       m.type === "error" ||
       (m.type === "done" && m.content) ||
-      (m.type === "tool_result" && m.toolCall?.tool === "edit_file"),
+      (m.type === "tool_result" && (m.toolCall?.tool === "edit_file" || m.toolCall?.tool === "write_file")),
   );
 
   return (
@@ -551,6 +569,7 @@ const AgentBlock: React.FC<{
               startLine={m.diffStartLine!}
               contextBefore={m.diffContextBefore ?? []}
               contextAfter={m.diffContextAfter ?? []}
+              isNew={m.diffIsNew}
             />
           );
         }
@@ -584,7 +603,7 @@ const AgentBlock: React.FC<{
                       parts.push(`${doneMsg.tokenCount} tok`);
                     }
                     return parts.length > 0 ? (
-                      <Text color="#374151">  {parts.join("  ")}</Text>
+                      <Text color="#374151"> {parts.join("  ")}</Text>
                     ) : null;
                   })()}
                 </Box>
@@ -711,8 +730,10 @@ export const App: React.FC<AppProps> = ({
     content: string;
   } | null>(null);
   const [infoScroll, setInfoScroll] = useState(0);
+  const [debugMode, setDebugMode] = useState<boolean>(() => cm.get().debugMode ?? false);
 
   const taskQueueRef = useRef<string[]>([]); // tasks queued while agent is running
+  const crashCompactRef = useRef(false); // guard against compact-loop after crash
   const agentRef = useRef<AgentRuntime | null>(null);
   const ptyRef = useRef<PtyManager | null>(null);
   const hiddenAboveRef = useRef(0);
@@ -740,6 +761,7 @@ export const App: React.FC<AppProps> = ({
     pickerIdx,
     messages,
     convHistory,
+    debugMode,
   });
   s.current = {
     agentStatus,
@@ -749,6 +771,7 @@ export const App: React.FC<AppProps> = ({
     pickerIdx,
     messages,
     convHistory,
+    debugMode,
   };
 
   const showSplash =
@@ -880,6 +903,22 @@ export const App: React.FC<AppProps> = ({
       setInputValue("");
       setHistIndex(-1);
       setPickerIdx(0);
+
+      // ── /debug toggle ─────────────────────────────────────────────────────────
+      if (input === "/debug") {
+        const newDebug = !s.current.debugMode;
+        setDebugMode(newDebug);
+        cm.set({ debugMode: newDebug });
+        addMsg({
+          type: "done",
+          content: newDebug
+            ? "Debug mode ON — full tool args, trust decisions, and raw errors are shown."
+            : "Debug mode OFF",
+        });
+        cm.addHistory(input);
+        setHistory(cm.getHistory());
+        return;
+      }
 
       // ── /config slash command ──────────────────────────────────────────────────
       if (input.startsWith("/config") || input.toLowerCase() === "/config") {
@@ -1088,6 +1127,51 @@ export const App: React.FC<AppProps> = ({
         return;
       }
 
+      // ── /lsp hover / /lsp def ─────────────────────────────────────────────────
+      if (input.startsWith("/lsp hover ") || input.startsWith("/lsp def ")) {
+        const isHover = input.startsWith("/lsp hover ")
+        const rest = isHover ? input.slice(11).trim() : input.slice(9).trim()
+        // expect: path:line:col
+        const m = rest.match(/^(.+):(\d+):(\d+)$/)
+        if (!m) {
+          addMsg({ type: "error", content: `Usage: /lsp ${isHover ? "hover" : "def"} <file>:<line>:<col>\n  e.g. /lsp ${isHover ? "hover" : "def"} src/auth.ts:42:15` })
+          cm.addHistory(input)
+          setHistory(cm.getHistory())
+          return
+        }
+        const [, filePath, lineStr, colStr] = m
+        const line = parseInt(lineStr, 10)
+        const col = parseInt(colStr, 10)
+        setAgentStatus("thinking")
+        setCurrentTokens("")
+        try {
+          const mgr = LspManager.getInstance()
+          if (isHover) {
+            const result = await mgr.hover(filePath, line, col, cwd)
+            setAgentStatus("idle")
+            if (!result) {
+              addMsg({ type: "error", content: `No hover info at ${filePath}:${line}:${col}\nMake sure the LSP server is installed (typescript-language-server / rust-analyzer / gopls / pylsp).` })
+            } else {
+              addMsg({ type: "command", commandTitle: `hover (${result.server})  ${filePath}:${line}:${col}`, content: result.text })
+            }
+          } else {
+            const result = await mgr.definition(filePath, line, col, cwd)
+            setAgentStatus("idle")
+            if (!result) {
+              addMsg({ type: "error", content: `No definition found at ${filePath}:${line}:${col}` })
+            } else {
+              addMsg({ type: "command", commandTitle: `definition (${result.server})`, content: `  ${result.targetFile}:${result.targetLine}` })
+            }
+          }
+        } catch (e) {
+          setAgentStatus("idle")
+          addMsg({ type: "error", content: String(e) })
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
       // ── /attach ───────────────────────────────────────────────────────────────
       if (input === "/attach") {
         setFilePicker(true);
@@ -1127,10 +1211,11 @@ export const App: React.FC<AppProps> = ({
         ];
         let compacted = "";
         try {
-          await LLMRouter.stream(summaryMsgs, cm.get().llm, (t) => {
+          const result = await LLMRouter.stream(summaryMsgs, cm.get().llm, (t) => {
             compacted += t;
             setCurrentTokens(compacted);
           });
+          compacted = result.response || compacted;
         } catch {}
         setCurrentTokens("");
         setAgentStatus("idle");
@@ -1492,6 +1577,8 @@ export const App: React.FC<AppProps> = ({
             "",
             "**System**",
             "  /lsp                           Run diagnostics (tsc/cargo/go vet/eslint)",
+            "  /lsp hover <file>:<line>:<col>  Hover info via LSP server",
+            "  /lsp def <file>:<line>:<col>    Go-to-definition via LSP server",
             "  /models                        List available models",
             "  /doctor                        Check connection & status",
             "  /clear                         Clear screen",
@@ -1759,9 +1846,11 @@ export const App: React.FC<AppProps> = ({
             ({
               response,
               aborted,
+              tokenCount: actualTokenCount,
             }: {
               response: string;
               aborted?: boolean;
+              tokenCount?: number;
             }) => {
               if (tokenFlushRef.current) {
                 clearTimeout(tokenFlushRef.current);
@@ -1778,7 +1867,7 @@ export const App: React.FC<AppProps> = ({
                 addMsg({
                   type: "done",
                   content: response,
-                  tokenCount: tokenCntRef.current,
+                  tokenCount: actualTokenCount,
                   durationMs: agentStartTimeRef.current
                     ? Date.now() - agentStartTimeRef.current
                     : undefined,
@@ -1806,6 +1895,15 @@ export const App: React.FC<AppProps> = ({
               setAgentStatus("error");
               addMsg({ type: "error", content: String(err) });
               agentRef.current = null;
+              // Auto-compact after crash so the context is preserved for next run
+              if (s.current.messages.length > 3 && !crashCompactRef.current) {
+                crashCompactRef.current = true;
+                addMsg({ type: "text", content: "> [auto-compact after crash]" });
+                setTimeout(() => {
+                  crashCompactRef.current = false;
+                  handleSubmit("/compact");
+                }, 400);
+              }
             });
           break;
         }
@@ -1895,9 +1993,18 @@ export const App: React.FC<AppProps> = ({
         return;
       }
 
-      // ── Kein Picker: Tab = Mode toggle (wenn kein Autocomplete) oder Autocomplete ──
+      // ── Kein Picker: Tab cycles BUILD → PLAN → DEBUG BUILD → BUILD oder Autocomplete ──
       if (inp.tab && !suggestion) {
-        setMode((m) => (m === "build" ? "plan" : "build"));
+        if (mode === "build" && !debugMode) {
+          setMode("plan");
+        } else if (mode === "plan") {
+          setMode("build");
+          setDebugMode(true);
+          cm.set({ debugMode: true });
+        } else if (mode === "build" && debugMode) {
+          setDebugMode(false);
+          cm.set({ debugMode: false });
+        }
         return;
       }
       if (inp.tab && suggestion) {
@@ -2040,11 +2147,15 @@ export const App: React.FC<AppProps> = ({
             agentStatus={agentStatus}
             tokenCount={tokenCount}
             mode={mode}
+            debugMode={debugMode}
           />
         </>
       ) : (
         /* ── Chat view ── */
         <>
+          {/* Scrollable area — flexGrow takes all space above the fixed bottom UI.
+              overflow="hidden" ensures it never pushes input/StatusBar off screen. */}
+          <Box flexGrow={1} flexShrink={1} flexDirection="column" overflow="hidden">
           <Box flexGrow={1} flexShrink={1} />
 
           {infoPopup ? (
@@ -2167,19 +2278,24 @@ export const App: React.FC<AppProps> = ({
               const overflow = Math.max(0, rendered.length - maxStreamLines);
               const visibleLines = rendered.slice(overflow);
 
-              const thinkOneLine = thinking
-                .trim()
-                .replace(/\s+/g, " ");
+              const thinkOneLine = thinking.trim().replace(/\s+/g, " ");
 
               return (
                 <Box marginBottom={0} flexDirection="column">
                   {thinking && (
                     <Box>
                       <Text color="#3B82F6"> │ </Text>
-                      <Text color="#6366F1" bold>Reasoning </Text>
+                      <Text color="#6366F1" bold>
+                        Reasoning{" "}
+                      </Text>
                       {stillThinking && <ThinkingDots label="" />}
                       {thinkOneLine ? (
-                        <Text color="#4B5563" dimColor italic wrap="truncate-start">
+                        <Text
+                          color="#4B5563"
+                          dimColor
+                          italic
+                          wrap="truncate-start"
+                        >
                           {thinkOneLine}
                         </Text>
                       ) : null}
@@ -2275,6 +2391,8 @@ export const App: React.FC<AppProps> = ({
             </Box>
           )}
 
+          </Box>{/* end scrollable area */}
+
           {/* ── Connect Popup ── */}
           {connectPopup && (
             <ConnectPopup
@@ -2348,6 +2466,7 @@ export const App: React.FC<AppProps> = ({
 
           {/* ── Input box (hidden when info popup is open) ── */}
           {!infoPopup && (
+            <Box flexShrink={0}>
             <Box
               flexDirection="column"
               borderStyle="single"
@@ -2420,7 +2539,7 @@ export const App: React.FC<AppProps> = ({
                       <Text color="#6B7280">send </Text>
                       <Text color="#4B5563">tab </Text>
                       <Text color="#6B7280">
-                        {suggestion ? "complete" : "switch mode"}{" "}
+                        {suggestion ? "complete" : debugMode ? "debug→build" : mode === "plan" ? "plan→debug" : "switch mode"}{" "}
                       </Text>
                       <Text color="#4B5563">@ </Text>
                       <Text color="#6B7280">attach</Text>
@@ -2453,16 +2572,20 @@ export const App: React.FC<AppProps> = ({
                 </Box>
               </Box>
             </Box>
+            </Box>
           )}
 
-          {/* Status bar — 1 line */}
+          {/* Status bar — 1 line, never pushed off screen */}
+          <Box flexShrink={0}>
           <StatusBar
             config={config}
             cwd={cwd}
             agentStatus={agentStatus}
             tokenCount={tokenCount}
             mode={mode}
+            debugMode={debugMode}
           />
+          </Box>
         </>
       )}
     </Box>

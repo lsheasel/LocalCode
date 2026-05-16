@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* **LSP integration** — real Language Server Protocol client (`LspClient`, `LspManager`) that communicates with language servers via JSON-RPC over stdin/stdout
+* **`lsp_hover` agent tool** — lets the agent query type information and documentation for any symbol at a given file position
+* **`lsp_definition` agent tool** — lets the agent resolve where any symbol is defined (file + line)
+* **`/lsp hover <file>:<line>:<col>`** slash command — hover info from the LSP server directly in the TUI
+* **`/lsp def <file>:<line>:<col>`** slash command — go-to-definition directly in the TUI
+* Supported LSP servers: `typescript-language-server` (TS/JS), `rust-analyzer` (Rust), `gopls` (Go), `pylsp` (Python), `clangd` (C/C++)
+* Servers start lazily on first use and stay running in the background
+
 ## [0.3.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.2.0...localcode-agent-v0.3.0) (2026-05-12)
 
 

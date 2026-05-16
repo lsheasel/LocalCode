@@ -5,7 +5,7 @@ export class OllamaProvider {
     messages: Message[],
     config: LLMConfig,
     onToken: (token: string) => void
-  ): Promise<string> {
+  ): Promise<{ response: string; totalTokens?: number }> {
     const baseURL = config.baseURL || 'http://localhost:11434'
     let fullResponse = ''
 
@@ -48,12 +48,17 @@ export class OllamaProvider {
             onToken(token)
             fullResponse += token
           }
-          if (data.done) return fullResponse
+          if (data.done) {
+            const promptTokens: number = data.prompt_eval_count ?? 0
+            const completionTokens: number = data.eval_count ?? 0
+            const totalTokens = promptTokens + completionTokens || undefined
+            return { response: fullResponse, totalTokens }
+          }
         } catch {}
       }
     }
 
-    return fullResponse
+    return { response: fullResponse }
   }
 
   async listModels(baseURL = 'http://localhost:11434'): Promise<string[]> {

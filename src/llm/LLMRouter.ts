@@ -10,7 +10,7 @@ export class LLMRouter {
     messages: Message[],
     config: LLMConfig,
     onToken: (token: string) => void
-  ): Promise<string> {
+  ): Promise<{ response: string; totalTokens?: number }> {
     switch (config.provider) {
       case 'ollama':
         return ollama.stream(messages, config, onToken)

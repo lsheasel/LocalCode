@@ -1,6 +1,7 @@
 import { resolve } from 'path'
 import { ToolResult } from '../../shared/types'
 import { lspCheck } from '../../lsp/LspRunner'
+import { LspManager } from '../../lsp/LspManager'
 
 export async function lspCheckTool(targetPath: string, cwd: string): Promise<ToolResult> {
   const resolved = targetPath === '.' ? undefined : resolve(cwd, targetPath)
@@ -28,5 +29,40 @@ export async function lspCheckTool(targetPath: string, cwd: string): Promise<Too
     success: errors === 0,
     output: lines.join('\n'),
     error: errors > 0 ? `${errors} error(s)` : undefined,
+  }
+}
+
+export async function lspHoverTool(filePath: string, line: number, col: number, cwd: string): Promise<ToolResult> {
+  try {
+    const result = await LspManager.getInstance().hover(filePath, line, col, cwd)
+    if (!result) {
+      return {
+        success: false,
+        output: '',
+        error: 'No LSP server available for this file type, or no hover info at this position.\nMake sure typescript-language-server / rust-analyzer / gopls / pylsp is installed.',
+      }
+    }
+    return { success: true, output: `[${result.server}]\n${result.text}` }
+  } catch (e) {
+    return { success: false, output: '', error: String(e) }
+  }
+}
+
+export async function lspDefinitionTool(filePath: string, line: number, col: number, cwd: string): Promise<ToolResult> {
+  try {
+    const result = await LspManager.getInstance().definition(filePath, line, col, cwd)
+    if (!result) {
+      return {
+        success: false,
+        output: '',
+        error: 'No LSP server available for this file type, or no definition found at this position.',
+      }
+    }
+    return {
+      success: true,
+      output: `[${result.server}] Defined in: ${result.targetFile}:${result.targetLine}`,
+    }
+  } catch (e) {
+    return { success: false, output: '', error: String(e) }
   }
 }
