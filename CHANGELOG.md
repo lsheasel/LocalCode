@@ -1,5 +1,6 @@
 # Changelog
 
+<<<<<<< HEAD
 ## [Unreleased]
 
 ### Features
@@ -11,6 +12,14 @@
 * **`/lsp def <file>:<line>:<col>`** slash command — go-to-definition directly in the TUI
 * Supported LSP servers: `typescript-language-server` (TS/JS), `rust-analyzer` (Rust), `gopls` (Go), `pylsp` (Python), `clangd` (C/C++)
 * Servers start lazily on first use and stay running in the background
+=======
+## [0.4.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.3.0...localcode-agent-v0.4.0) (2026-05-14)
+
+
+### Features
+
+* add plugin management functionality ([9cbfd71](https://github.com/lsheasel/LocalCode/commit/9cbfd71fef9c965cf1ad02dea5e5fd7209f799a1))
+>>>>>>> 331793fb4fe6586843678d849e6fb84620b8005e
 
 ## [0.3.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.2.0...localcode-agent-v0.3.0) (2026-05-12)
 
