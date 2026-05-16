@@ -1,6 +1,13 @@
 # Changelog
 
 <<<<<<< HEAD
+## [0.6.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.5.0...localcode-agent-v0.6.0) (2026-05-16)
+
+
+### Features
+
+* update version to 0.6.0 and add background update check functionality ([d710d3b](https://github.com/lsheasel/LocalCode/commit/d710d3bd362b2cfa1099b145cae3ed45470bb64d))
+
 ## [0.5.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.4.0...localcode-agent-v0.5.0) (2026-05-16)
 
 
