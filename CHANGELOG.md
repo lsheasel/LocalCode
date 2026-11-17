@@ -1,6 +1,5 @@
 # Changelog
 
-<<<<<<< HEAD
 ## [0.8.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.7.0...localcode-agent-v0.8.0) (2026-11-17)
 
 
@@ -34,26 +33,20 @@
 ### Features
 
 * **lsp:** add hover and definition tools for LSP integration ([c0e3783](https://github.com/lsheasel/LocalCode/commit/c0e3783d11894bf7eb158612f40a0bffc352163e))
+* **LSP integration:** a real Language Server Protocol client (`LspClient`, `LspManager`) that talks to language servers via JSON-RPC over stdin/stdout
+* **`lsp_hover` agent tool:** the agent can look up type information and documentation for any symbol at a file position
+* **`lsp_definition` agent tool:** the agent can find where any symbol is defined (file and line)
+* **`/lsp hover <file>:<line>:<col>`:** hover info from the language server, right in the TUI
+* **`/lsp def <file>:<line>:<col>`:** go-to-definition, right in the TUI
+* Supported servers: `typescript-language-server` (TS/JS), `rust-analyzer` (Rust), `gopls` (Go), `pylsp` (Python), `clangd` (C/C++)
+* Servers start on first use and keep running in the background
 
-## [Unreleased]
-
-### Features
-
-* **LSP integration** — real Language Server Protocol client (`LspClient`, `LspManager`) that communicates with language servers via JSON-RPC over stdin/stdout
-* **`lsp_hover` agent tool** — lets the agent query type information and documentation for any symbol at a given file position
-* **`lsp_definition` agent tool** — lets the agent resolve where any symbol is defined (file + line)
-* **`/lsp hover <file>:<line>:<col>`** slash command — hover info from the LSP server directly in the TUI
-* **`/lsp def <file>:<line>:<col>`** slash command — go-to-definition directly in the TUI
-* Supported LSP servers: `typescript-language-server` (TS/JS), `rust-analyzer` (Rust), `gopls` (Go), `pylsp` (Python), `clangd` (C/C++)
-* Servers start lazily on first use and stay running in the background
-=======
 ## [0.4.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.3.0...localcode-agent-v0.4.0) (2026-05-14)
 
 
 ### Features
 
 * add plugin management functionality ([9cbfd71](https://github.com/lsheasel/LocalCode/commit/9cbfd71fef9c965cf1ad02dea5e5fd7209f799a1))
->>>>>>> 331793fb4fe6586843678d849e6fb84620b8005e
 
 ## [0.3.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.2.0...localcode-agent-v0.3.0) (2026-05-12)
 

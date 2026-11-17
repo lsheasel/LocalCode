@@ -1,7 +1,18 @@
 {
   "packages": {
     ".": {
-      "release-type": "node"
+      "release-type": "node",
+      "changelog-sections": [
+        { "type": "feat", "section": "✨ Features" },
+        { "type": "fix", "section": "🐛 Bug Fixes" },
+        { "type": "perf", "section": "⚡ Performance" },
+        { "type": "docs", "section": "📖 Documentation" },
+        { "type": "refactor", "section": "🔧 Under the hood" },
+        { "type": "test", "section": "🔧 Under the hood" },
+        { "type": "build", "section": "🔧 Under the hood" },
+        { "type": "ci", "section": "🔧 Under the hood" },
+        { "type": "chore", "section": "Miscellaneous", "hidden": true }
+      ]
     }
   }
 }

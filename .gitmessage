@@ -1,0 +1,12 @@
+
+
+# One line per change people will notice. Each line becomes one entry
+# in the release notes, so write it for users, not for the code:
+#
+#   feat(agent): web_search tool to find real pages
+#
+#   fix(tui): no flicker when resizing the terminal
+#
+# Several changes in one commit: one line each, blank lines between.
+# Types: feat, fix, perf, docs (shown); refactor, test, build, ci
+# (under the hood); chore (hidden). Details: .github/release-notes/README.md
