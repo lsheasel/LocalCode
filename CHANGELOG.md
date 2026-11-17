@@ -1,6 +1,19 @@
 # Changelog
 
 <<<<<<< HEAD
+## [0.8.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.7.0...localcode-agent-v0.8.0) (2026-11-17)
+
+
+### Features
+
+* **tui:** add end-to-end tests for terminal UI interactions ([7794ce1](https://github.com/lsheasel/LocalCode/commit/7794ce127454fcb68cb85ce5c64aca63f13ce718))
+* **unit:** introduce unit tests for agent and tool functionalities ([7794ce1](https://github.com/lsheasel/LocalCode/commit/7794ce127454fcb68cb85ce5c64aca63f13ce718))
+
+
+### Bug Fixes
+
+* remove node-pty from external dependencies in build configuration ([7794ce1](https://github.com/lsheasel/LocalCode/commit/7794ce127454fcb68cb85ce5c64aca63f13ce718))
+
 ## [0.7.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.6.0...localcode-agent-v0.7.0) (2026-05-22)
 
 
