@@ -7,16 +7,25 @@ import {
   listFilesTool, findFilesTool, searchFilesTool,
 } from './filesystem'
 import { webFetchTool, httpRequestTool } from './network'
+import { webSearchTool } from './webSearch'
 import { lspCheckTool, lspHoverTool, lspDefinitionTool } from './lsp'
 import { gitBranchTool, gitStashTool, runTestsTool } from './git'
 
-export async function executeTool(toolCall: ToolCall, cwd: string): Promise<ToolResult> {
+/**
+ * Run one tool call. `onOutput` streams the live output of long-running tools
+ * (shell commands, test runs) to the UI while they work.
+ */
+export async function executeTool(
+  toolCall: ToolCall,
+  cwd: string,
+  onOutput?: (chunk: string) => void,
+): Promise<ToolResult> {
   const { tool, arguments: args } = toolCall
   try {
     switch (tool) {
       // ── Shell ─────────────────────────────────────────────────────────────────
       case 'run_shell':
-        return runShell(String(args.command || ''), String(args.cwd || cwd))
+        return runShell(String(args.command || ''), String(args.cwd || cwd), onOutput)
 
       // ── File system ───────────────────────────────────────────────────────────
       case 'read_file':
@@ -67,9 +76,11 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
 
       // ── Testing ───────────────────────────────────────────────────────────────
       case 'run_tests':
-        return runTestsTool(cwd)
+        return runTestsTool(cwd, onOutput)
 
       // ── Network ───────────────────────────────────────────────────────────────
+      case 'web_search':
+        return webSearchTool(String(args.query || ''), Number(args.limit) || undefined)
       case 'web_fetch':
         return webFetchTool(String(args.url || ''), String(args.format || 'text'))
       case 'http_request':

@@ -1,5 +1,18 @@
 import React from 'react'
 import { Box, Text } from 'ink'
+import { theme, ICON } from '../shared/theme'
+import { highlight, TokenKind } from '../shared/highlight'
+
+const SYNTAX_COLOR: Record<TokenKind, string> = {
+  plain: theme.synPlain,
+  keyword: theme.synKeyword,
+  string: theme.synString,
+  comment: theme.synComment,
+  number: theme.synNumber,
+  type: theme.synType,
+  func: theme.synFunc,
+  punct: theme.synPunct,
+}
 
 function stripInlineMarkers(text: string): string {
   return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/`([^`]*)`/g, '$1').replace(/\*(.*?)\*/g, '$1')
@@ -30,10 +43,10 @@ const InlinePart: React.FC<{ text: string }> = ({ text }) => {
   return (
     <>
       {parts.map((p, i) => {
-        if (p.code)   return <Text key={i} color="#7DD3FC">{p.t}</Text>
-        if (p.bold)   return <Text key={i} bold color="#E5E7EB">{p.t}</Text>
-        if (p.italic) return <Text key={i} color="#D1D5DB" italic>{p.t}</Text>
-        return <Text key={i} color="#D1D5DB">{p.t}</Text>
+        if (p.code)   return <Text key={i} color={theme.accent}>{p.t}</Text>
+        if (p.bold)   return <Text key={i} bold color={theme.textBright}>{p.t}</Text>
+        if (p.italic) return <Text key={i} color={theme.text} italic>{p.t}</Text>
+        return <Text key={i} color={theme.text}>{p.t}</Text>
       })}
     </>
   )
@@ -49,25 +62,44 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
   let tableRowIdx = 0
 
   const flushCode = (key: string) => {
+    const tokens = highlight(codeLines, codeLang)
     nodes.push(
       <Box key={key} flexDirection="column">
         {codeLang && (
           <Box>
-            <Text color="#1D4ED8">  ┌─ </Text>
-            <Text color="#60A5FA">{codeLang}</Text>
+            <Text color={theme.primaryDeep}>  {ICON.branchStart}─ </Text>
+            <Text color={theme.primaryBright}>{codeLang}</Text>
           </Box>
         )}
-        {codeLines.map((l, i) => (
+        {tokens.map((line, i) => (
           <Box key={i}>
-            <Text color="#374151">  │ </Text>
-            <Text color="#7DD3FC" wrap="wrap">{l || ' '}</Text>
+            <Box flexShrink={0}>
+              <Text color={theme.textGhost}>  {ICON.rail} </Text>
+            </Box>
+            <Text wrap="wrap">
+              {line.length === 0
+                ? ' '
+                : line.map((t, j) => (
+                    <Text key={j} color={SYNTAX_COLOR[t.kind]} italic={t.kind === 'comment'}>
+                      {t.text}
+                    </Text>
+                  ))}
+            </Text>
           </Box>
         ))}
-        <Text color="#1D4ED8">  └{'─'.repeat(Math.min(40, Math.max(8, ...codeLines.map(l => l.length + 1))))}</Text>
+        <Text color={theme.primaryDeep}>  {ICON.branchEnd}{'─'.repeat(Math.min(40, Math.max(8, ...codeLines.map(l => l.length + 1))))}</Text>
       </Box>
     )
     codeLines = []
     codeLang = ''
+  }
+
+  // Nested list items keep their indentation, so sub-points sit under
+  // their parent instead of starting at the left edge again.
+  const listIndent = (raw: string) => {
+    const lead = raw.length - raw.trimStart().length
+    const width = raw.slice(0, lead).replace(/\t/g, '  ').length
+    return ' '.repeat(Math.min(8, width))
   }
 
   for (let i = 0; i < lines.length; i++) {
@@ -92,7 +124,7 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
         <Box key={i}>
           {cols.map((col, ci) => (
             <Box key={ci} marginRight={2}>
-              <Text color={isHeader ? '#93C5FD' : '#D1D5DB'} bold={isHeader} wrap="truncate-end">
+              <Text color={isHeader ? theme.primaryLight : theme.text} bold={isHeader} wrap="truncate-end">
                 <InlinePart text={col} />
               </Text>
             </Box>
@@ -102,15 +134,15 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
     } else {
       tableRowIdx = 0
       if (trimmed.startsWith('### ')) {
-        nodes.push(<Text key={i} bold color="#93C5FD" wrap="wrap">{stripInlineMarkers(trimmed.slice(4))}</Text>)
+        nodes.push(<Text key={i} bold color={theme.primaryLight} wrap="wrap">{stripInlineMarkers(trimmed.slice(4))}</Text>)
       } else if (trimmed.startsWith('## ')) {
-        nodes.push(<Text key={i} bold color="#60A5FA" wrap="wrap">{stripInlineMarkers(trimmed.slice(3))}</Text>)
+        nodes.push(<Text key={i} bold color={theme.primaryBright} wrap="wrap">{stripInlineMarkers(trimmed.slice(3))}</Text>)
       } else if (trimmed.startsWith('# ')) {
-        nodes.push(<Text key={i} bold color="#3B82F6" wrap="wrap">{stripInlineMarkers(trimmed.slice(2))}</Text>)
+        nodes.push(<Text key={i} bold color={theme.primary} wrap="wrap">{stripInlineMarkers(trimmed.slice(2))}</Text>)
       } else if (/^[-*+] /.test(trimmed)) {
         nodes.push(
           <Box key={i}>
-            <Text color="#6B7280">  • </Text>
+            <Text color={theme.textDim}>{listIndent(line)}  {ICON.bullet} </Text>
             <Box flexGrow={1}><Text wrap="wrap"><InlinePart text={trimmed.slice(2)} /></Text></Box>
           </Box>
         )
@@ -118,12 +150,12 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
         const m = trimmed.match(/^(\d+)\. (.*)/)!
         nodes.push(
           <Box key={i}>
-            <Text color="#6B7280">  {m[1]}. </Text>
+            <Text color={theme.textDim}>{listIndent(line)}  {m[1]}. </Text>
             <Box flexGrow={1}><Text wrap="wrap"><InlinePart text={m[2]} /></Text></Box>
           </Box>
         )
       } else if (/^---+$/.test(trimmed)) {
-        nodes.push(<Text key={i} color="#4B5563">{'─'.repeat(48)}</Text>)
+        nodes.push(<Text key={i} color={theme.textFaint} wrap="truncate-end">{'─'.repeat(48)}</Text>)
       } else if (!trimmed) {
         nodes.push(<Text key={i}>{' '}</Text>)
       } else {

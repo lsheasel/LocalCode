@@ -1,9 +1,10 @@
 import { readFile, writeFile, readdir, mkdir, rm, copyFile as fsCopyFile, rename, appendFile } from 'fs/promises'
 import { existsSync } from 'fs'
-import { resolve, join, dirname } from 'path'
+import { resolve, join, dirname, relative } from 'path'
 import { ToolResult } from '../../shared/types'
-import { runShell } from './shell'
 import { decodeContent, hintFromPath } from './decoders'
+import { planEdit } from './fuzzyEdit'
+import { checkpoints } from '../checkpoints'
 
 // Extensions that get auto-decoded (pretty-printed) even without an explicit format
 const AUTO_DECODE_EXTS = new Set(['.json', '.jsonc'])
@@ -49,6 +50,7 @@ export async function writeFileTool(filePath: string, content: string, cwd: stri
       try { oldContent = await readFile(resolved, 'utf-8') } catch {}
     }
 
+    await checkpoints.record(resolved)
     await writeFile(resolved, content, 'utf-8')
 
     // Build diff metadata so the UI can render a DiffView
@@ -120,6 +122,7 @@ export async function appendFileTool(filePath: string, content: string, cwd: str
   try {
     const dir = dirname(resolved)
     if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+    await checkpoints.record(resolved)
     await appendFile(resolved, content, 'utf-8')
     return { success: true, output: `Appended ${content.length} chars to ${resolved}` }
   } catch (err) {
@@ -137,35 +140,35 @@ export async function editFileTool(filePath: string, oldStr: string, newStr: str
   } catch (err) {
     return { success: false, output: '', error: friendlyFsError('read', filePath, err) }
   }
-  if (!content.includes(oldStr)) {
+  const outcome = planEdit(content, oldStr, newStr)
+  if (!outcome.ok) {
     const firstLine = oldStr.split('\n')[0].slice(0, 60)
     return {
       success: false, output: '',
-      error: `edit_file: pattern not found in "${filePath}"\n  First line searched: ${firstLine}\n  Check for exact whitespace, indentation, and line endings.`,
+      error: `edit_file: ${outcome.reason} in "${filePath}"\n  First line searched: ${firstLine}\n  Copy the exact lines from read_file (without the line numbers) and include enough context to be unique.`,
     }
   }
-
-  const idx = content.indexOf(oldStr)
-  const startLine = content.slice(0, idx).split('\n').length
-  const allLines  = content.split('\n')
-  const oldLines  = oldStr.split('\n')
-  const CONTEXT   = 3
-  const contextBefore = allLines.slice(Math.max(0, startLine - 1 - CONTEXT), startLine - 1)
-  const contextAfter  = allLines.slice(startLine - 1 + oldLines.length, startLine - 1 + oldLines.length + CONTEXT)
+  const { plan } = outcome
+  const allLines = content.split(/\r?\n/)
+  const CONTEXT = 3
+  const contextBefore = allLines.slice(Math.max(0, plan.startLine - 1 - CONTEXT), plan.startLine - 1)
+  const contextAfter = allLines.slice(plan.startLine - 1 + plan.oldLines.length, plan.startLine - 1 + plan.oldLines.length + CONTEXT)
 
   try {
-    await writeFile(resolved, content.replace(oldStr, newStr), 'utf-8')
+    await checkpoints.record(resolved)
+    await writeFile(resolved, plan.content, 'utf-8')
   } catch (err) {
     return { success: false, output: '', error: friendlyFsError('write', filePath, err) }
   }
+  const note = plan.strategy === 'exact' ? '' : ` (matched ignoring ${plan.strategy === 'indentation' ? 'indentation' : plan.strategy === 'trailing-space' ? 'trailing spaces' : 'line endings'})`
   return {
     success: true,
-    output: `Edited: ${resolved}`,
+    output: `Edited: ${resolved}${note}`,
     meta: {
       diffPath: filePath,
-      diffOld: oldLines,
-      diffNew: newStr.split('\n'),
-      diffStartLine: startLine,
+      diffOld: plan.oldLines,
+      diffNew: plan.newLines,
+      diffStartLine: plan.startLine,
       diffContextBefore: contextBefore,
       diffContextAfter: contextAfter,
     },
@@ -177,6 +180,7 @@ export async function deleteFileTool(filePath: string, cwd: string, recursive: b
   const resolved = resolve(cwd, filePath)
   if (!existsSync(resolved)) return { success: false, output: '', error: `delete_file: "${filePath}" does not exist` }
   try {
+    await checkpoints.record(resolved) // files only — a deleted folder can't be undone
     await rm(resolved, { recursive, force: true })
     return { success: true, output: `Deleted: ${resolved}` }
   } catch (err) {
@@ -192,6 +196,8 @@ export async function moveFileTool(from: string, to: string, cwd: string): Promi
   try {
     const dir = dirname(dst)
     if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+    await checkpoints.record(src)
+    await checkpoints.record(dst)
     await rename(src, dst)
     return { success: true, output: `Moved: ${src} → ${dst}` }
   } catch (err) {
@@ -207,6 +213,7 @@ export async function copyFileTool(from: string, to: string, cwd: string): Promi
   try {
     const dir = dirname(dst)
     if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+    await checkpoints.record(dst)
     await fsCopyFile(src, dst)
     return { success: true, output: `Copied: ${src} → ${dst}` }
   } catch (err) {
@@ -305,16 +312,57 @@ export async function findFilesTool(pattern: string, searchPath: string, cwd: st
   return { success: true, output: results.join('\n') || 'No files found.' }
 }
 
+/**
+ * Search file contents for `pattern` (a regex, case-insensitive; falls back to
+ * plain text if it isn't a valid regex). Done in-process rather than through
+ * findstr/grep: the shell is PowerShell on Windows, where the old
+ * `findstr … 2>nul` failed outright (`2>nul` means "write to a file called
+ * nul" there), and shell output came back in the console's code page.
+ */
 export async function searchFilesTool(pattern: string, searchPath: string, cwd: string): Promise<ToolResult> {
+  if (!pattern) return { success: false, output: '', error: 'search_files: pattern is empty' }
   const resolved = resolve(cwd, searchPath)
-  const exts = ['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'cs', 'cpp', 'c', 'h',
-                 'json', 'yaml', 'yml', 'md', 'rb', 'php', 'kt', 'swift', 'html', 'css']
+  const EXTS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'go', 'rs', 'java', 'cs', 'cpp', 'c', 'h',
+    'json', 'yaml', 'yml', 'md', 'rb', 'php', 'kt', 'swift', 'html', 'css', 'scss', 'vue', 'svelte', 'toml', 'sh', 'ps1'])
+  const SKIP = new Set(['node_modules', '.git', 'dist', '__pycache__', '.next', 'build', 'target'])
+  const MAX_RESULTS = 60
+  const MAX_FILE_BYTES = 1024 * 1024
 
-  if (process.platform === 'win32') {
-    const filePatterns = exts.map(e => `"${resolved}\\*.${e}"`).join(' ')
-    return runShell(`findstr /s /n /i /r "${pattern}" ${filePatterns} 2>nul`, cwd)
+  let regex: RegExp
+  try {
+    regex = new RegExp(pattern, 'i')
+  } catch {
+    regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
   }
 
-  const includes = exts.map(e => `--include="*.${e}"`).join(' ')
-  return runShell(`grep -rn ${includes} "${pattern}" "${resolved}" 2>/dev/null | head -60`, cwd)
+  const results: string[] = []
+  async function walk(dir: string): Promise<void> {
+    if (results.length >= MAX_RESULTS) return
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (results.length >= MAX_RESULTS) return
+      if (SKIP.has(entry.name)) continue
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) { await walk(full); continue }
+      const ext = entry.name.includes('.') ? entry.name.split('.').pop()!.toLowerCase() : ''
+      if (!EXTS.has(ext)) continue
+      let text: string
+      try {
+        const buf = await readFile(full)
+        if (buf.length > MAX_FILE_BYTES) continue
+        text = buf.toString('utf8')
+      } catch { continue }
+      const lines = text.split(/\r?\n/)
+      const rel = relative(cwd, full) || full
+      for (let i = 0; i < lines.length && results.length < MAX_RESULTS; i++) {
+        if (regex.test(lines[i])) results.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 200)}`)
+      }
+    }
+  }
+
+  await walk(resolved)
+  if (results.length === 0) return { success: true, output: `No matches for "${pattern}".` }
+  const more = results.length >= MAX_RESULTS ? `\n(stopped after ${MAX_RESULTS} matches — narrow the pattern or path)` : ''
+  return { success: true, output: results.join('\n') + more }
 }

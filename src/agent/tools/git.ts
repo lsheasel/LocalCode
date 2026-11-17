@@ -32,20 +32,20 @@ export async function gitStashTool(action: string, message: string, cwd: string)
   }
 }
 
-export async function runTestsTool(cwd: string): Promise<ToolResult> {
+export async function runTestsTool(cwd: string, onOutput?: (chunk: string) => void): Promise<ToolResult> {
   if (existsSync(join(cwd, 'package.json'))) {
     try {
       const pkg = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf-8'))
-      if (pkg.scripts?.test) return runShell('npm test', cwd)
+      if (pkg.scripts?.test) return runShell('npm test', cwd, onOutput)
     } catch {}
   }
-  if (existsSync(join(cwd, 'Cargo.toml'))) return runShell('cargo test', cwd)
-  if (existsSync(join(cwd, 'go.mod')))     return runShell('go test ./...', cwd)
+  if (existsSync(join(cwd, 'Cargo.toml'))) return runShell('cargo test', cwd, onOutput)
+  if (existsSync(join(cwd, 'go.mod')))     return runShell('go test ./...', cwd, onOutput)
   if (existsSync(join(cwd, 'pytest.ini')) || existsSync(join(cwd, 'pyproject.toml')))
-    return runShell('python3 -m pytest', cwd)
-  if (existsSync(join(cwd, 'pom.xml')))    return runShell('mvn test -q', cwd)
+    return runShell('python3 -m pytest', cwd, onOutput)
+  if (existsSync(join(cwd, 'pom.xml')))    return runShell('mvn test -q', cwd, onOutput)
   if (existsSync(join(cwd, 'build.gradle')) || existsSync(join(cwd, 'build.gradle.kts')))
-    return runShell('./gradlew test', cwd)
+    return runShell('./gradlew test', cwd, onOutput)
 
   return { success: false, output: '', error: 'No test runner detected. Run tests manually with run_shell.' }
 }

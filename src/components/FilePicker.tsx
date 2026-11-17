@@ -2,75 +2,83 @@ import React, { useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import { extname } from 'path'
+import { Fieldset } from './Fieldset'
+import { theme, ICON } from '../shared/theme'
+import { truncStart } from '../shared/utils'
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'])
+const MAX_VISIBLE = 8
 
 interface Props {
+  width: number
   files: string[]
   onSelect: (path: string) => void
   onCancel: () => void
 }
 
-export const FilePicker: React.FC<Props> = ({ files, onSelect, onCancel }) => {
-  const [search, setSearch]           = useState('')
+export const FilePicker: React.FC<Props> = ({ width: widthProp, files, onSelect, onCancel }) => {
+  const [search, setSearch] = useState('')
   const [selectedIdx, setSelectedIdx] = useState(0)
+  const width = Math.max(30, widthProp)
 
-  const filtered = files
-    .filter(f => f.toLowerCase().includes(search.toLowerCase()))
-    .slice(0, 8)
+  const filtered = files.filter((f) => f.toLowerCase().includes(search.toLowerCase()))
+  const sel = Math.min(selectedIdx, Math.max(0, filtered.length - 1))
+  const top = Math.max(0, Math.min(sel - MAX_VISIBLE + 1, filtered.length - MAX_VISIBLE))
+  const visible = filtered.slice(top, top + MAX_VISIBLE)
 
-  useInput((_, inp) => {
-    if (inp.upArrow)   { setSelectedIdx(i => Math.max(0, i - 1)); return }
-    if (inp.downArrow) { setSelectedIdx(i => Math.min(filtered.length - 1, i + 1)); return }
-    if (inp.escape)    { onCancel(); return }
-    if (inp.return) {
-      const file = filtered[Math.min(selectedIdx, filtered.length - 1)]
+  useInput((_ch, key) => {
+    if (key.escape) return onCancel()
+    if (key.upArrow) return setSelectedIdx((i) => Math.max(0, Math.min(i, filtered.length - 1) - 1))
+    if (key.downArrow) return setSelectedIdx((i) => Math.min(filtered.length - 1, i + 1))
+    if (key.return) {
+      const file = filtered[sel]
       if (file) onSelect(file)
-      return
     }
   })
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="#22C55E" marginX={1}>
-      <Box paddingX={2}>
-        <Text color="#22C55E" bold> @ Attach </Text>
-        <Text color="#4B5563">› Datei oder Bild auswählen</Text>
-      </Box>
-
-      <Box paddingX={2} borderStyle="single" borderTop borderColor="#15803D">
-        <Text color="#6B7280">/ </Text>
+    <Fieldset
+      width={width}
+      color={theme.borderSubtle}
+      title={[{ text: 'attach', color: theme.primary }]}
+      right={[{ text: `${filtered.length} files`, color: theme.textFaint }]}
+      footer={[
+        { text: '↑↓', color: theme.textMuted },
+        { text: ' select   ', color: theme.textFaint },
+        { text: 'enter', color: theme.textMuted },
+        { text: ' attach   ', color: theme.textFaint },
+        { text: 'esc', color: theme.textMuted },
+        { text: ' close', color: theme.textFaint },
+      ]}
+    >
+      <Box>
+        <Text color={theme.primary}>{ICON.caret}</Text>
         <TextInput
           value={search}
-          onChange={v => { setSearch(v); setSelectedIdx(0) }}
-          placeholder="Search file..."
+          onChange={(v) => {
+            setSearch(v)
+            setSelectedIdx(0)
+          }}
+          placeholder="Search files"
           focus
         />
       </Box>
-
-      {filtered.length === 0 ? (
-        <Box paddingX={4} paddingY={1}>
-          <Text color="#6B7280">No files found</Text>
-        </Box>
+      <Text color={theme.thread}>{'─'.repeat(Math.max(0, width - 4))}</Text>
+      {visible.length === 0 ? (
+        <Text color={theme.textDim}>No files found.</Text>
       ) : (
-        filtered.map((f, i) => {
-          const sel     = i === selectedIdx
+        visible.map((f, i) => {
+          const isSel = top + i === sel
           const isImage = IMAGE_EXTS.has(extname(f).toLowerCase())
           return (
-            <Box key={f} paddingX={2}>
-              <Text color={sel ? '#22C55E' : '#374151'}>{sel ? '▶ ' : '  '}</Text>
-              <Text color={sel ? '#86EFAC' : '#9CA3AF'}>
-                {isImage ? '[img] ' : '[file] '}{f}
-              </Text>
-            </Box>
+            <Text key={f} wrap="truncate-end">
+              <Text color={isSel ? theme.primary : theme.textGhost}>{isSel ? ICON.selected : ICON.unselected}</Text>
+              <Text color={theme.textFaint}>{isImage ? 'image ' : 'file  '}</Text>
+              <Text color={isSel ? theme.textBright : theme.textMuted} bold={isSel}>{truncStart(f, width - 14)}</Text>
+            </Text>
           )
         })
       )}
-
-      <Box paddingX={2} borderStyle="single" borderTop borderColor="#15803D">
-        <Text color="#374151">↑↓ </Text><Text color="#4B5563">select  </Text>
-        <Text color="#374151">enter </Text><Text color="#4B5563">attach  </Text>
-        <Text color="#374151">esc </Text><Text color="#4B5563">close</Text>
-      </Box>
-    </Box>
+    </Fieldset>
   )
 }

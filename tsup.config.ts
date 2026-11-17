@@ -7,7 +7,6 @@ export default defineConfig({
   outDir: 'dist',
   clean: true,
   jsx: 'transform',
-  external: ['node-pty'],
   banner: {
     js: '#!/usr/bin/env node',
   },

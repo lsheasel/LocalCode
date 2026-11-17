@@ -1,100 +1,102 @@
 import React, { useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
+import { Fieldset } from './Fieldset'
+import { theme, ICON, modeColors, Mode } from '../shared/theme'
+import { truncEnd } from '../shared/utils'
+
+const MAX_VISIBLE = 8
 
 interface Props {
+  width: number
   models: string[]
   loading: boolean
   currentModel: string
+  /** The mode the choice applies to — plan/debug can run on their own model. */
+  mode: Mode
   onSelect: (model: string) => void
   onCancel: () => void
 }
 
-export const ModelPicker: React.FC<Props> = ({ models, loading, currentModel, onSelect, onCancel }) => {
-  const [search, setSearch]           = useState('')
+const HINTS = [
+  { text: '↑↓', color: theme.textMuted },
+  { text: ' select   ', color: theme.textFaint },
+  { text: 'enter', color: theme.textMuted },
+  { text: ' use   ', color: theme.textFaint },
+  { text: 'esc', color: theme.textMuted },
+  { text: ' close', color: theme.textFaint },
+]
+
+export const ModelPicker: React.FC<Props> = ({ width: widthProp, models, loading, currentModel, mode, onSelect, onCancel }) => {
+  const [search, setSearch] = useState('')
   const [selectedIdx, setSelectedIdx] = useState(0)
+  const width = Math.max(30, widthProp)
 
-  const filtered = models.filter(m => m.toLowerCase().includes(search.toLowerCase()))
+  const filtered = models.filter((m) => m.toLowerCase().includes(search.toLowerCase()))
+  const sel = Math.min(selectedIdx, Math.max(0, filtered.length - 1))
+  const top = Math.max(0, Math.min(sel - MAX_VISIBLE + 1, filtered.length - MAX_VISIBLE))
+  const visible = filtered.slice(top, top + MAX_VISIBLE)
 
-  useInput((ch, inp) => {
-    if (loading) {
-      if (inp.escape) { onCancel(); return }
-      return
-    }
-    if (inp.upArrow)   { setSelectedIdx(i => Math.max(0, i - 1)); return }
-    if (inp.downArrow) { setSelectedIdx(i => Math.min(filtered.length - 1, i + 1)); return }
-    if (inp.escape)    { onCancel(); return }
-    if (inp.return) {
-      const model = filtered[Math.min(selectedIdx, filtered.length - 1)]
+  useInput((_ch, key) => {
+    if (key.escape) return onCancel()
+    if (loading) return
+    if (key.upArrow) return setSelectedIdx((i) => Math.max(0, Math.min(i, filtered.length - 1) - 1))
+    if (key.downArrow) return setSelectedIdx((i) => Math.min(filtered.length - 1, i + 1))
+    if (key.return) {
+      const model = filtered[sel]
       if (model) onSelect(model)
-      return
     }
   })
 
-  const visibleModels = filtered.slice(0, 8)
-
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="#6366F1" marginX={1}>
-
-      {/* Header */}
-      <Box paddingX={2}>
-        <Text color="#6366F1" bold> Model </Text>
-        <Text color="#4B5563">› Select a model  </Text>
-        <Text color="#374151">current: </Text>
-        <Text color="#9CA3AF">{currentModel}</Text>
-      </Box>
-
-      {/* Search bar */}
-      <Box paddingX={2} borderStyle="single" borderTop borderColor="#312E81">
-        <Text color="#6B7280">/ </Text>
+    <Fieldset
+      width={width}
+      color={theme.borderSubtle}
+      title={[{ text: 'model', color: theme.primary }]}
+      right={[
+        { text: 'for ', color: theme.textFaint },
+        { text: modeColors[mode].label, color: modeColors[mode].accent },
+        { text: ' mode', color: theme.textFaint },
+      ]}
+      footer={HINTS}
+    >
+      <Box>
+        <Text color={theme.primary}>{ICON.caret}</Text>
         <TextInput
           value={search}
-          onChange={v => { setSearch(v); setSelectedIdx(0) }}
-          placeholder="Search model ..."
+          onChange={(v) => {
+            setSearch(v)
+            setSelectedIdx(0)
+          }}
+          placeholder="Search models"
           focus={!loading}
         />
       </Box>
-
-      {/* List */}
+      <Text color={theme.thread}>{'─'.repeat(Math.max(0, width - 4))}</Text>
       {loading ? (
-        <Box paddingX={4} paddingY={1}>
-          <Text color="#6B7280">Loading models from server ...</Text>
-        </Box>
-      ) : visibleModels.length === 0 ? (
-        <Box paddingX={4} paddingY={1}>
-          <Text color="#6B7280">
-            {models.length === 0 ? 'No models found — is the server reachable?' : 'No matches'}
-          </Text>
-        </Box>
+        <Text color={theme.textDim}>Loading models from the server…</Text>
+      ) : visible.length === 0 ? (
+        <Text color={theme.textDim}>
+          {models.length === 0 ? 'No models found — is the server running? Try /doctor.' : 'Nothing matches.'}
+        </Text>
       ) : (
-        visibleModels.map((m, i) => {
-          const sel     = i === selectedIdx
+        visible.map((m, i) => {
+          const isSel = top + i === sel
           const current = m === currentModel
           return (
-            <Box key={m} paddingX={2}>
-              <Text color={sel ? '#6366F1' : '#374151'}>{sel ? '▶ ' : '  '}</Text>
-              {current
-                ? <Text color={sel ? '#A5B4FC' : '#6366F1'} bold>✓ {m}</Text>
-                : <Text color={sel ? '#A5B4FC' : '#9CA3AF'}>  {m}</Text>
-              }
-            </Box>
+            <Text key={m} wrap="truncate-end">
+              <Text color={isSel ? theme.primary : theme.textGhost}>{isSel ? ICON.selected : ICON.unselected}</Text>
+              <Text color={isSel ? theme.textBright : theme.textMuted} bold={isSel}>{truncEnd(m, width - 16)}</Text>
+              {current && <Text color={theme.primary}>  {ICON.ok} in use</Text>}
+            </Text>
           )
         })
       )}
-
-      {filtered.length > 8 && (
-        <Box paddingX={4}>
-          <Text color="#374151">… {filtered.length - 8} more (refine search)</Text>
-        </Box>
+      {filtered.length > MAX_VISIBLE && (
+        <Text color={theme.textFaint}>
+          {top + visible.length} of {filtered.length}
+        </Text>
       )}
-
-      {/* Footer */}
-      <Box paddingX={2} borderStyle="single" borderTop borderColor="#312E81">
-        <Text color="#374151">↑↓ </Text><Text color="#4B5563">select  </Text>
-        <Text color="#374151">enter </Text><Text color="#4B5563">apply  </Text>
-        <Text color="#374151">esc </Text><Text color="#4B5563">close</Text>
-      </Box>
-
-    </Box>
+    </Fieldset>
   )
 }

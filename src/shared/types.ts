@@ -7,12 +7,53 @@ export interface LLMConfig {
   apiKey?: string
   temperature?: number
   maxTokens?: number
+  /**
+   * How tools reach the model: 'native' uses the server's tool API, 'text'
+   * describes them in the prompt and parses JSON from the answer, 'auto'
+   * (default) picks native when the model supports it.
+   */
+  toolMode?: 'auto' | 'native' | 'text'
+  /** Model to use in plan / debug mode instead of `model` (build mode). */
+  modeModels?: Partial<Record<'plan' | 'debug', string>>
+}
+
+/** What one streamed completion returns. */
+export interface StreamResult {
+  response: string
+  /** Prompt + completion tokens of this request — the context in use. */
+  totalTokens?: number
+  /** Tokens the model generated in this request. */
+  completionTokens?: number
+  /** The answer was cut off at the max-tokens limit. */
+  truncated?: boolean
+  /** Calls made through the native tool API (when tools were offered). */
+  toolCalls?: NativeToolCall[]
 }
 
 export interface Message {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
   images?: string[]   // base64-encoded images for multimodal models
+  /** Assistant message: tool calls made through the native tool API. */
+  tool_calls?: NativeToolCall[]
+  /** Tool message: which call this is the result of. */
+  tool_call_id?: string
+}
+
+/** A tool call as the native (OpenAI-style) tool API returns it. */
+export interface NativeToolCall {
+  id: string
+  name: string
+  /** JSON text, exactly as the model produced it. */
+  arguments: string
+}
+
+/** A tool offered through the native tool API. */
+export interface ToolSchema {
+  name: string
+  description: string
+  /** JSON Schema of the arguments object. */
+  parameters: Record<string, unknown>
 }
 
 export interface Attachment {
@@ -69,6 +110,8 @@ export interface AgentMessage {
   timestamp: number
   tokenCount?: number
   durationMs?: number
+  /** Generation speed of the answer, in tokens per second. */
+  tokensPerSec?: number
   debugInfo?: {
     iteration?: number
     tokens?: number

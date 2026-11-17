@@ -1,11 +1,15 @@
 {
   "name": "localcode-agent",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Futuristic AI Developer Terminal & Autonomous Coding Agent",
   "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lsheasel/LocalCode.git"
   },
   "files": [
     "dist/",
@@ -21,7 +25,10 @@
     "start": "node dist/localcode.js",
     "link:dev": "npm run build && npm link",
     "prepublishOnly": "npm run build",
-    "publish:npm": "npm publish"
+    "publish:npm": "npm publish",
+    "test": "vitest run test/unit",
+    "test:tui": "npm run build && vitest run test/tui",
+    "test:all": "npm run build && vitest run"
   },
   "dependencies": {
     "@types/discord-rpc": "^4.0.10",
@@ -29,14 +36,16 @@
     "discord-rpc": "^4.0.1",
     "ink": "^4.4.1",
     "ink-text-input": "^5.0.1",
-    "node-pty": "^1.0.0",
     "react": "^18.2.0",
     "strip-ansi": "^6.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/react": "^18.2.0",
+    "@xterm/headless": "^5.5.0",
+    "node-pty": "^1.1.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^2.1.9"
   }
 }

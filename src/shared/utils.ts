@@ -1,114 +1,31 @@
-import { AgentMessage } from './types'
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from './constants'
 
-// ── Turn grouping ─────────────────────────────────────────────────────────────
-export type Turn =
-  | { type: 'user'; content: string; timestamp: number }
-  | { type: 'agent'; messages: AgentMessage[] }
-
-export function groupIntoTurns(messages: AgentMessage[]): Turn[] {
-  const turns: Turn[] = []
-  let agentMsgs: AgentMessage[] = []
-
-  const flush = () => {
-    if (agentMsgs.length > 0) {
-      turns.push({ type: 'agent', messages: agentMsgs })
-      agentMsgs = []
-    }
+/**
+ * Fit as many items as possible into `width` cells, in order, dropping the
+ * rest. Used by the one-row bars so they never wrap onto a second row.
+ */
+export function fitItems<T>(items: T[], width: number, cost: (item: T) => number): T[] {
+  const out: T[] = []
+  let used = 0
+  for (const item of items) {
+    const w = cost(item)
+    if (used + w > width) break
+    used += w
+    out.push(item)
   }
-
-  for (const msg of messages) {
-    if (msg.type === 'text' && msg.content.startsWith('> ')) {
-      flush()
-      turns.push({
-        type: 'user',
-        content: msg.content.slice(2),
-        timestamp: msg.timestamp,
-      })
-    } else {
-      agentMsgs.push(msg)
-    }
-  }
-  flush()
-  return turns
+  return out
 }
 
-// ── Line-height estimation ────────────────────────────────────────────────────
-export function countLines(text: string, width: number): number {
-  return text
-    .split('\n')
-    .reduce(
-      (s, l) =>
-        s + Math.max(1, Math.ceil((l.length || 1) / Math.max(1, width))),
-      0,
-    )
+/** Shorten `s` to `max` cells, keeping the start (`…` marks the cut). */
+export function truncEnd(s: string, max: number): string {
+  if (max <= 0) return ''
+  return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + '…'
 }
 
-export function estimateTurnLines(turn: Turn, innerWidth: number): number {
-  if (turn.type === 'user') return 4 // box border + content + timestamp + margin
-
-  let lines = 0
-  for (const msg of turn.messages) {
-    if (msg.type === 'error') {
-      lines += countLines(msg.content, innerWidth)
-    } else if (msg.type === 'command') {
-      lines += msg.content.split('\n').length + (msg.commandTitle ? 1 : 0) + 2
-    } else if (msg.type === 'text') {
-      lines += countLines(msg.content, innerWidth)
-    } else if (msg.type === 'done' && msg.content) {
-      lines += countLines(
-        msg.content.replace(/^DONE:\s*/i, '').trim(),
-        innerWidth,
-      )
-    } else if (
-      msg.type === 'tool_result' &&
-      msg.toolCall?.tool === 'edit_file' &&
-      msg.toolResult?.meta
-    ) {
-      const m = msg.toolResult.meta
-      lines +=
-        (m.diffContextBefore?.length ?? 0) +
-        (m.diffOld?.length ?? 0) +
-        (m.diffNew?.length ?? 0) +
-        (m.diffContextAfter?.length ?? 0) +
-        4
-    } else {
-      lines += 1
-    }
-  }
-  return Math.max(2, lines + 2) // +1 footer, +1 margin
-}
-
-export function getVisibleTurns(
-  turns: Turn[],
-  availRows: number,
-  innerWidth: number,
-  scrollLines: number,
-): { visible: Turn[]; hiddenAbove: number; hiddenBelow: number } {
-  const heights = turns.map((t) => estimateTurnLines(t, innerWidth))
-  const total = heights.reduce((s, h) => s + h, 0)
-
-  // Viewport: the availRows-line window ending at (total - scrollLines)
-  const viewEnd = Math.max(availRows, total - scrollLines)
-  const viewStart = viewEnd - availRows
-
-  const result: Turn[] = []
-  let hiddenAbove = 0
-  let hiddenBelow = 0
-  let pos = 0
-
-  for (let i = 0; i < turns.length; i++) {
-    const h = heights[i]
-    const turnEnd = pos + h
-    // Skip turns that start before the viewport (including partial overlaps at top)
-    // to avoid Ink rendering full turn content that overflows above the layout boundary
-    if (pos < viewStart) hiddenAbove++
-    else if (pos >= viewEnd) hiddenBelow++
-    else result.push(turns[i])
-    pos = turnEnd
-  }
-
-  return { visible: result, hiddenAbove, hiddenBelow }
+/** Shorten `s` to `max` cells, keeping the end (`…` marks the cut). */
+export function truncStart(s: string, max: number): string {
+  if (max <= 0) return ''
+  return s.length <= max ? s : '…' + s.slice(s.length - Math.max(0, max - 1))
 }
 
 export function fmtTime(ts: number): string {
@@ -187,4 +104,113 @@ export function getSuggestion(input: string, history: string[]): string {
   const a = COMMAND_SUGGESTIONS.find((s) => s.startsWith(input) && s !== input)
   if (a) return a.slice(input.length)
   return ''
+}
+
+// ── Transcript virtualisation ─────────────────────────────────────────────────
+
+/** Rows `text` takes when wrapped at `width` (rough: one cell per char). */
+export function countLines(text: string, width: number): number {
+  const w = Math.max(1, width)
+  return text.split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / w)), 0)
+}
+
+/** Wrap `text` to lines of at most `width` cells, breaking at spaces where possible. */
+export function wrapText(text: string, width: number): string[] {
+  const w = Math.max(1, width)
+  const out: string[] = []
+  for (const para of text.split('\n')) {
+    let line = ''
+    for (const word of para.split(/(\s+)/)) {
+      if (!word) continue
+      if ((line + word).length <= w) { line += word; continue }
+      if (line.trim()) out.push(line.trimEnd())
+      line = word.trimStart()
+      while (line.length > w) { out.push(line.slice(0, w)); line = line.slice(w) }
+    }
+    out.push(line.trimEnd())
+  }
+  return out
+}
+
+export interface ItemWindow {
+  /** First item to render (inclusive). */
+  start: number
+  /** Last item to render (exclusive). */
+  end: number
+  /** Estimated rows of the items skipped below the window. */
+  linesBelow: number
+  /** Estimated rows of the items skipped above the window. */
+  linesAbove: number
+}
+
+/**
+ * Pick which transcript items to render for a viewport of `viewRows` rows,
+ * scrolled `scrollLines` up from the bottom.
+ *
+ * This only keeps long sessions cheap — the *exact* scroll position comes from
+ * Ink: the rendered items sit in a clipped, bottom-aligned box shifted down by
+ * `scrollLines - linesBelow` rows (a negative bottom margin). The heights are
+ * estimates, so a full screen of slack is rendered on both sides; an
+ * under-estimate can never leave a gap in the viewport.
+ */
+export function getItemWindow(
+  heights: number[],
+  viewRows: number,
+  scrollLines: number,
+): ItemWindow {
+  const slack = Math.max(viewRows, 10)
+  const lo = scrollLines - slack
+  const hi = scrollLines + viewRows + slack
+
+  let start = heights.length
+  let end = heights.length
+  let linesBelow = 0
+  let linesAbove = 0
+  let pos = 0 // rows between the bottom of the transcript and this item
+
+  for (let i = heights.length - 1; i >= 0; i--) {
+    const h = heights[i]
+    if (pos + h <= lo) {
+      linesBelow += h
+      end = i
+      start = i
+    } else if (pos >= hi) {
+      linesAbove += h
+    } else {
+      start = i
+    }
+    pos += h
+  }
+  return { start, end, linesBelow, linesAbove }
+}
+
+// ── Fuzzy search ──────────────────────────────────────────────────────────────
+
+/**
+ * Score how well `query` matches `text` as a subsequence (case-insensitive);
+ * null when it doesn't. Consecutive letters and letters at the start of a
+ * word or path segment score higher, so "sl" finds "/session load" first.
+ */
+export function fuzzyScore(query: string, text: string): number | null {
+  const q = query.toLowerCase().replace(/\s+/g, '')
+  if (!q) return 0
+  const t = text.toLowerCase()
+  let score = 0
+  let ti = 0
+  let streak = 0
+  for (const ch of q) {
+    const found = t.indexOf(ch, ti)
+    if (found === -1) return null
+    const boundary = found === 0 || /[\s/._\-:]/.test(t[found - 1])
+    streak = found === ti ? streak + 1 : 0
+    score += 1 + streak * 2 + (boundary ? 3 : 0) - Math.min(3, (found - ti) * 0.1)
+    ti = found + 1
+  }
+  // Shorter texts win ties.
+  return score - t.length * 0.01
+}
+
+/** 950 → "950", 12345 → "12.3k", 65536 → "65.5k". */
+export function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(n)
 }

@@ -1,6 +1,8 @@
 import React from 'react'
 import { render } from 'ink'
 import chalk from 'chalk'
+import { format } from 'util'
+import { createFullscreen, createMouseInput } from '../shared/screen'
 import { App } from '../app'
 import { ConfigManager } from '../config/ConfigManager'
 import { discordPresence } from '../discord/DiscordPresence'
@@ -20,6 +22,7 @@ ${chalk.bold.blue('⚡ LocalCode')} ${chalk.gray(`v${appVersion}`)} ${chalk.gray
 ${chalk.bold('Usage:')}
   ${chalk.blue('localcode')}                        Start interactive TUI
   ${chalk.blue('localcode')} <task>                 Run AI task directly
+  ${chalk.blue('localcode')} --continue, -c         Pick up the last session in this folder
   ${chalk.blue('localcode')} --provider <p>         Override LLM provider
   ${chalk.blue('localcode')} --model <m>            Override model
   ${chalk.blue('localcode')} --help                 Show this help
@@ -53,6 +56,8 @@ function extractFlag(flag: string): string | undefined {
   return val
 }
 
+const resume = remaining.includes('--continue') || remaining.includes('-c')
+remaining = remaining.filter((a) => a !== '--continue' && a !== '-c')
 const provider = extractFlag('--provider')
 const model = extractFlag('--model')
 
@@ -65,49 +70,67 @@ if (provider || model) {
 
 const initialCommand = remaining.length > 0 ? remaining.join(' ') : undefined
 
-// ── Alternate screen ───────────────────────────────────────────────────────
-const useAltScreen = process.stdout.isTTY
+// ── Fullscreen ─────────────────────────────────────────────────────────────
+// In a terminal the UI owns the whole screen, like opencode: alternate screen,
+// painted by shared/screen.ts. Piped output falls back to Ink's normal renderer.
+const fullscreen = process.stdout.isTTY ? createFullscreen(process.stdout) : null
+const mouse = fullscreen && process.stdin.isTTY ? createMouseInput(process.stdin) : null
 
-function enterAltScreen(): void {
-  if (!useAltScreen) return
-  process.stdout.write(
-    '\x1B[?1049h' + // enter alternate screen buffer
-    '\x1B[2J'    + // clear screen
-    '\x1B[3J'    + // clear scrollback
-    '\x1B[H'     + // move cursor to top-left
-    '\x1B[?1007h'  // alternate scroll: wheel → arrow keys, clicks NOT captured (text selection works)
-  )
+// Anything printed straight to the console (plugins, libraries) would land in
+// the middle of the painted screen. Hold it and print it once the UI is gone.
+const deferredLogs: string[] = []
+if (fullscreen) {
+  const hold = (...parts: unknown[]) => { deferredLogs.push(format(...parts)) }
+  console.log = hold
+  console.info = hold
+  console.warn = hold
+  console.error = hold
+  console.debug = hold
 }
 
-function exitAltScreen(): void {
-  if (!useAltScreen) return
-  process.stdout.write(
-    '\x1B[?1007l' + // disable alternate scroll
-    '\x1B[?1049l'   // exit alternate screen
-  )
+let restored = false
+function restoreTerminal(): void {
+  if (restored) return
+  restored = true
+  fullscreen?.leave()
+  if (deferredLogs.length) process.stderr.write(deferredLogs.join('\n') + '\n')
 }
 
-// Restore terminal on any unexpected exit
-process.on('exit', exitAltScreen)
-process.on('SIGINT', () => { exitAltScreen(); discordPresence.destroy(); process.exit(0) })
-process.on('SIGTERM', () => { exitAltScreen(); discordPresence.destroy(); process.exit(0) })
-process.on('uncaughtException', () => { exitAltScreen(); discordPresence.destroy(); process.exit(1) })
+function crash(err: unknown): void {
+  restoreTerminal()
+  discordPresence.destroy()
+  // Print after leaving the alternate screen — otherwise the message is
+  // thrown away with it and the app seems to vanish without a reason.
+  process.stderr.write(`\nlocalcode crashed: ${err instanceof Error ? err.stack || err.message : String(err)}\n`)
+  process.exit(1)
+}
 
-enterAltScreen()
+process.on('exit', restoreTerminal)
+process.on('SIGINT', () => { restoreTerminal(); discordPresence.destroy(); process.exit(0) })
+process.on('SIGTERM', () => { restoreTerminal(); discordPresence.destroy(); process.exit(0) })
+process.on('uncaughtException', crash)
+process.on('unhandledRejection', crash)
+
+fullscreen?.enter()
 loadPlugins(globalRegistry, globalCommandRegistry).catch(() => undefined)
-discordPresence.connect().then(() => discordPresence.update('idle', cwd))
+discordPresence.connect().then(() => discordPresence.update('idle', cwd)).catch(() => undefined)
 
 // ── Launch Ink app ─────────────────────────────────────────────────────────
 const { waitUntilExit } = render(
-  React.createElement(App, { initialCommand, cwd, onStatusChange: (s: string, dir: string) => discordPresence.update(s as any, dir) }),
-  {
-    exitOnCtrlC: false,
-    patchConsole: true,
-    mouse: true,
-  }
+  React.createElement(App, { initialCommand, cwd, resume, wheel: mouse?.events, onStatusChange: (s: string, dir: string) => discordPresence.update(s as any, dir) }),
+  fullscreen
+    ? {
+        stdout: fullscreen.stream,
+        ...(mouse ? { stdin: mouse.stream } : {}),
+        debug: true,
+        exitOnCtrlC: false,
+        patchConsole: false,
+      }
+    : { exitOnCtrlC: false, patchConsole: true },
 )
 
 waitUntilExit().then(() => {
-  exitAltScreen()
+  restoreTerminal()
+  discordPresence.destroy()
   process.exit(0)
 })

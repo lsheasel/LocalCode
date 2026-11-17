@@ -1,8 +1,10 @@
-import { useCallback, MutableRefObject } from 'react'
+import { useCallback, useRef, MutableRefObject } from 'react'
 import { AgentMessage, Attachment, ToolCall, ToolResult } from '../shared/types'
 import { AgentRuntime, DiffPreview } from '../agent/AgentRuntime'
 import { ConfigManager } from '../config/ConfigManager'
-import { PtyManager } from '../pty/PtyManager'
+import { runShell } from '../agent/tools/shell'
+import { checkpoints, displayPath } from '../agent/checkpoints'
+import { describeTool } from '../shared/toolText'
 import { LLMRouter } from '../llm/LLMRouter'
 import { lspCheck } from '../lsp/LspRunner'
 import { LspManager } from '../lsp/LspManager'
@@ -13,6 +15,10 @@ import {
 } from '../plugins/installer.js'
 import { globalRegistry, globalCommandRegistry } from '../plugins/registry.js'
 import { loadPlugins, reloadPlugin } from '../plugins/loader.js'
+import { COMPACT_SUMMARY_PROMPT } from '../shared/prompts'
+import { INSTRUCTIONS_TEMPLATE, projectInstructionsPath } from '../agent/projectInstructions'
+import { writeFileSync } from 'fs'
+import { join, basename } from 'path'
 import { loadAttachment, listCwdFiles } from '../shared/attachments'
 import { parseThinking } from '../shared/utils'
 import { Message } from '../shared/types'
@@ -60,9 +66,12 @@ interface SlashCommandsOptions {
   setConfirm: (c: ConfirmRequest | null) => void
   setPluginCmds: (cmds: Array<{ cmd: string; description: string }>) => void
   setInfoScroll: (n: number) => void
+  /** Context the last request used, in tokens. */
+  setContextTokens: (n: number) => void
+  /** Live output of the command or tool that is running right now. */
+  setLiveOutput: (o: { title: string; text: string } | null) => void
   s: MutableRefObject<SlashCommandsState>
   agentRef: MutableRefObject<AgentRuntime | null>
-  ptyRef: MutableRefObject<PtyManager | null>
   taskQueueRef: MutableRefObject<string[]>
   crashCompactRef: MutableRefObject<boolean>
   tokenBufRef: MutableRefObject<string>
@@ -73,8 +82,15 @@ interface SlashCommandsOptions {
   agentStartTimeRef: MutableRefObject<number>
 }
 
-let _id = 0
-const nextId = () => String(++_id)
+/**
+ * "Carry out the plan" in German or English: umsetzen, setz … um, mach nach
+ * Plan, wie geplant, implement, mach das, los, go ahead, follow the plan …
+ */
+const IMPLEMENT_INTENT =
+  /\b(umsetzen|setz\w*\b.*\bum\b|implementier(e|en|st|t)?|implement|ausf(ü|ue)hren|f(ü|ue)hr\w*\b.*\baus\b|mach\w*\s+(es|das|mal|los|weiter|nach|so)|nach\s+(dem\s+|deinem\s+|diesem\s+)?plan|wie\s+geplant|leg\s+los|los\s+geht|go\s+ahead|do\s+it|execute|build\s+it|apply\s+(it|the\s+plan)|follow\s+(the|this|your)\s+plan|according\s+to\s+(the|this|your)\s+plan|start\s+(coding|building))\b|^(go|los|mach|ja\s+mach|yes\s+do\s+it)[\s!.]*$/i
+
+/** Shell passthrough output kept in the transcript; the rest is summarised. */
+const SHELL_OUTPUT_LINES = 200
 
 export function useSlashCommands(opts: SlashCommandsOptions) {
   const {
@@ -84,13 +100,40 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
     setHistory, setMessages, setConvHistory, setAttachments,
     setMode, setConnectPopup, setModelPicker, setModelLoading,
     setModelList, setFilePicker, setFileList, setConfirm,
-    setPluginCmds, setInfoScroll,
-    s, agentRef, ptyRef, taskQueueRef, crashCompactRef,
+    setPluginCmds, setInfoScroll, setContextTokens, setLiveOutput,
+    s, agentRef, taskQueueRef, crashCompactRef,
     tokenBufRef, tokenCntRef, tokenFlushRef, toolMsgsRef,
     streamInThinkingRef, agentStartTimeRef,
   } = opts
 
   const cm = ConfigManager.getInstance()
+
+  // Live output arrives in many small chunks; repaint at most ~10× a second.
+  const liveRef = useRef<{ title: string; text: string; timer: ReturnType<typeof setTimeout> | null }>({
+    title: '',
+    text: '',
+    timer: null,
+  })
+  const pushLive = (title: string, chunk: string) => {
+    const live = liveRef.current
+    if (live.title !== title) live.text = ''
+    live.title = title
+    live.text = (live.text + chunk).slice(-20000)
+    if (!live.timer) {
+      live.timer = setTimeout(() => {
+        live.timer = null
+        setLiveOutput({ title: live.title, text: live.text })
+      }, 100)
+    }
+  }
+  const endLive = () => {
+    const live = liveRef.current
+    if (live.timer) clearTimeout(live.timer)
+    live.timer = null
+    live.text = ''
+    live.title = ''
+    setLiveOutput(null)
+  }
 
   const handleSubmit = useCallback(
     async (rawInput: string) => {
@@ -276,7 +319,12 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
       }
 
       // ── /lsp ──────────────────────────────────────────────────────────────────
-      if (input === '/lsp' || input.startsWith('/lsp ')) {
+      // (hover / def are handled below and must not be swallowed here)
+      if (
+        (input === '/lsp' || input.startsWith('/lsp ')) &&
+        !input.startsWith('/lsp hover') &&
+        !input.startsWith('/lsp def')
+      ) {
         const targetArg = input.slice(4).trim() || '.'
         setAgentStatus('thinking')
         setCurrentTokens('')
@@ -369,6 +417,65 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         return
       }
 
+      // ── /continue ─────────────────────────────────────────────────────────────
+      if (input === '/continue') {
+        const loaded = cm.loadSession(cm.autosaveName(cwd))
+        if (!loaded?.length) {
+          addMsg({ type: 'error', content: 'There is no earlier session in this folder to continue.' })
+        } else {
+          setMessages(loaded)
+          setConvHistory(conversationFrom(loaded))
+        }
+        return
+      }
+
+      // ── /init ─────────────────────────────────────────────────────────────────
+      if (input === '/init') {
+        const existing = projectInstructionsPath(cwd)
+        if (existing) {
+          addMsg({ type: 'error', content: `${basename(existing)} already exists in this folder — edit it to change the project instructions.` })
+        } else {
+          const file = join(cwd, 'LOCALCODE.md')
+          try {
+            writeFileSync(file, INSTRUCTIONS_TEMPLATE, 'utf8')
+            addMsg({
+              type: 'command',
+              commandTitle: 'created LOCALCODE.md',
+              content: [
+                '  Project instructions — sent to the model with every task.',
+                '  Fill in commands, conventions and what to avoid; keep it short.',
+                '  Preferences for all projects go in ~/.localcode/LOCALCODE.md.',
+              ].join('\n'),
+            })
+          } catch (err) {
+            addMsg({ type: 'error', content: `Could not create LOCALCODE.md: ${(err as Error).message}` })
+          }
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /undo ─────────────────────────────────────────────────────────────────
+      if (input === '/undo' || input === '/undo all') {
+        const all = input === '/undo all'
+        const undone = all ? await checkpoints.undoTask() : await checkpoints.undoLast()
+        if (undone.length === 0) {
+          addMsg({ type: 'error', content: 'Nothing to undo — no file changes recorded in this session.' })
+        } else {
+          addMsg({
+            type: 'command',
+            commandTitle: all ? 'undo all changes of the last task' : 'undo last change',
+            content: undone
+              .map((u) => `  ${u.action === 'removed' ? 'removed ' : 'restored'}  ${displayPath(u.path, cwd)}`)
+              .join('\n'),
+          })
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
       // ── /attach ───────────────────────────────────────────────────────────────
       if (input === '/attach') {
         setFilePicker(true)
@@ -399,11 +506,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
           .filter(Boolean)
           .join('\n')
         const summaryMsgs = [
-          {
-            role: 'system' as const,
-            content:
-              'You are a helpful assistant. Summarize the following conversation concisely in bullet points, preserving key decisions and results.',
-          },
+          { role: 'system' as const, content: COMPACT_SUMMARY_PROMPT },
           { role: 'user' as const, content: summary },
         ]
         let compacted = ''
@@ -417,7 +520,15 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         setCurrentTokens('')
         setAgentStatus('idle')
         setMessages([])
-        setConvHistory([])
+        setContextTokens(0)
+        // Keep the summary as the agent's context — otherwise /compact would
+        // silently wipe everything the agent knew about the conversation.
+        const { response: summaryText } = parseThinking(compacted)
+        setConvHistory(
+          summaryText.trim()
+            ? [{ role: 'assistant' as const, content: `Summary of the conversation so far:\n${summaryText.trim()}` }]
+            : [],
+        )
         addMsg({ type: 'done', content: `[Compacted]\n${compacted}` })
         return
       }
@@ -467,6 +578,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             return
           }
           setMessages(loaded)
+          setConvHistory(conversationFrom(loaded))
           addMsg({
             type: 'done',
             content: `Session "${name}" loaded  (${loaded.length} messages)`,
@@ -498,6 +610,17 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
       }
 
       // ── /model ────────────────────────────────────────────────────────────────
+      if (input === '/model reset') {
+        const cfg = cm.get().llm
+        if (mode === 'build' || !cfg.modeModels?.[mode]) {
+          addMsg({ type: 'error', content: `${mode} mode already uses the default model (${cfg.model}).` })
+        } else {
+          const { [mode]: _dropped, ...rest } = cfg.modeModels
+          cm.setLLM({ modeModels: rest })
+          addMsg({ type: 'done', content: `${mode} mode uses the default model again (${cfg.model}).` })
+        }
+        return
+      }
       if (input === '/model') {
         setInputValue('')
         setModelPicker(true)
@@ -758,11 +881,18 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /session save <name>           Save conversation',
             '  /session load <name>           Load conversation',
             '  /session delete <name>         Delete session',
+            '  /continue                      Pick up the last session in this folder',
+            '  /init                          Create LOCALCODE.md (project instructions)',
             '  /compact                       Summarize & compress conversation',
+            '',
+            '**Changes**',
+            '  /undo                          Revert the last file change',
+            '  /undo all                      Revert every change of the last task',
             '',
             '**Connection**',
             '  /connect                       Connect to server (popup)',
-            '  /model                         Select model (popup)',
+            '  /model                         Select the model for the current mode',
+            '  /model reset                   Plan/debug mode: back to the default model',
             '',
             '**Configuration**',
             '  /config                        Show current configuration',
@@ -782,12 +912,15 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /exit                          Quit',
             '',
             '**Keyboard shortcuts**',
-            '  ctrl+c                         Abort agent  /  quit',
-            '  ctrl+l                         Clear chat history',
+            '  ctrl+c                         Abort agent  /  clear input  /  quit',
+            '  ctrl+p                         Palette: commands, models, sessions, files',
+            '  alt+enter  /  ctrl+j           New line in the prompt',
+            '  ctrl+l                         Clear screen and chat',
             '  ctrl+k                         Clear input line',
-            '  ↑ ↓                            Navigate input history',
-            '  tab                            Autocomplete / toggle BUILD↔PLAN',
-            '  scroll wheel / PgUp / PgDn     Scroll chat',
+            '  ↑ ↓                            Lines in the prompt, then input history',
+            '  tab                            Autocomplete / cycle build → plan → debug',
+            '  wheel  /  PgUp PgDn            Scroll the conversation',
+            '  shift+drag                     Select text to copy',
             '',
             '**Shell**',
             '  $ <cmd>   or   ! <cmd>         e.g.: $ npm test',
@@ -799,7 +932,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /plugin reload                 Reload all plugins',
           ])
           break
-        case 'doctor': {
+        case 'doctor':
+        case '/doctor': {
           showInfo('doctor', ['  Checking…'])
           const cfg = cm.get()
           const isOllama = cfg.llm.provider === 'ollama'
@@ -823,7 +957,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
           ])
           break
         }
-        case 'models': {
+        case 'models':
+        case '/models': {
           showInfo('models', ['  Loading…'])
           const cfg = cm.get()
           const isOllama = cfg.llm.provider === 'ollama'
@@ -856,8 +991,27 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
           break
         }
         default: {
+          // Shell passthrough: run it and show the output. (It used to be
+          // written into a hidden PTY whose output nothing ever read.)
           if (input.startsWith('$') || input.startsWith('!')) {
-            ptyRef.current?.write(input.slice(1).trim() + '\n')
+            const command = input.slice(1).trim()
+            if (!command) return
+            setAgentStatus('running')
+            const result = await runShell(command, cwd, (chunk) => pushLive(`$ ${command}`, chunk))
+            endLive()
+            setAgentStatus('idle')
+            const text = result.success
+              ? result.output
+              : [result.output, result.error].filter(Boolean).join('\n')
+            const lines = text.split('\n')
+            const shown = lines.length > SHELL_OUTPUT_LINES
+              ? [...lines.slice(0, SHELL_OUTPUT_LINES), `… ${lines.length - SHELL_OUTPUT_LINES} more lines`]
+              : lines
+            addMsg({
+              type: result.success ? 'command' : 'error',
+              ...(result.success ? { commandTitle: `$ ${command}` } : {}),
+              content: result.success ? shown.join('\n') : `$ ${command}\n${shown.join('\n')}`,
+            })
             break
           }
 
@@ -884,6 +1038,15 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             }
           }
 
+          // An unknown "/word" is a mistyped command, not a prompt for the model.
+          if (/^\/[\w-]+(\s|$)/.test(input)) {
+            addMsg({
+              type: 'error',
+              content: `Unknown command: ${input.split(/\s/)[0]}  —  type /help for the list`,
+            })
+            return
+          }
+
           const atPattern = /@([^\s]+)/g
           const pendingAtts: Promise<Attachment | null>[] = []
           let cleanInput = input
@@ -901,6 +1064,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
           setAgentStatus('thinking')
           setCurrentTokens('')
           setTokenCount(0)
+          // The whole task, from sending it to the answer.
+          agentStartTimeRef.current = Date.now()
 
           const attLabel = allAtts.length
             ? `  [${allAtts.map((a) => a.name).join(', ')}]`
@@ -937,7 +1102,6 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             tokenCntRef.current += token.length
             if (wasEmpty) {
               streamInThinkingRef.current = true
-              agentStartTimeRef.current = Date.now()
             }
             if (
               streamInThinkingRef.current &&
@@ -978,6 +1142,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               toolCall: ToolCall
               result: ToolResult
             }) => {
+              endLive()
               const toolCallJson = JSON.stringify({
                 tool: toolCall.tool,
                 arguments: toolCall.arguments,
@@ -1037,6 +1202,16 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               addMsg({ type: 'debug', content })
             },
           )
+          agent.on('notice', (text: string) => {
+            addMsg({ type: 'thinking', content: text })
+          })
+          agent.on('usage', ({ contextTokens }: { contextTokens: number }) => {
+            setContextTokens(contextTokens)
+          })
+          agent.on('tool_output', ({ toolCall, chunk }: { toolCall: ToolCall; chunk: string }) => {
+            const [verb, target] = describeTool(toolCall.tool, toolCall.arguments)
+            pushLive(`${verb} ${target}`.trim(), chunk)
+          })
           agent.on('injection', ({ message }: { message: string }) => {
             // Already shown in the UI when inject() was called; just acknowledge
           })
@@ -1056,11 +1231,14 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               response,
               aborted,
               tokenCount: actualTokenCount,
+              tokensPerSec,
             }: {
               response: string
               aborted?: boolean
               tokenCount?: number
+              tokensPerSec?: number
             }) => {
+              endLive()
               if (tokenFlushRef.current) {
                 clearTimeout(tokenFlushRef.current)
                 tokenFlushRef.current = null
@@ -1078,6 +1256,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                   type: 'done',
                   content: response,
                   tokenCount: actualTokenCount || charCount || undefined,
+                  tokensPerSec,
                   durationMs: agentStartTimeRef.current
                     ? Date.now() - agentStartTimeRef.current
                     : undefined,
@@ -1098,8 +1277,18 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             },
           )
           const { convHistory } = s.current
+          // Plan mode can only read. Asked to carry out the plan, switch to build
+          // mode instead of letting the agent go round in circles.
+          let runMode = mode
+          const isQuestion = /\?\s*$/.test(cleanInput)
+          if (mode === 'plan' && convHistory.length > 0 && !isQuestion && IMPLEMENT_INTENT.test(cleanInput)) {
+            runMode = 'build'
+            setMode('build')
+            cm.set({ debugMode: false })
+            addMsg({ type: 'done', content: 'Switched to build mode to carry out the plan — file changes still ask for your permission.' })
+          }
           agent
-            .run(cleanInput, cwd, allAtts, mode, convHistory)
+            .run(cleanInput, cwd, allAtts, runMode, convHistory)
             .catch((err: Error) => {
               setAgentStatus('error')
               addMsg({ type: 'error', content: String(err) })
@@ -1124,4 +1313,21 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
   )
 
   return { handleSubmit }
+}
+
+/**
+ * Rebuild what the agent should remember from a saved transcript: your
+ * prompts and its answers. Loading a session used to restore only the
+ * screen, so the agent started from nothing.
+ */
+export function conversationFrom(messages: AgentMessage[]): Message[] {
+  const out: Message[] = []
+  for (const m of messages) {
+    if (m.type === 'text' && m.content.startsWith('> ') && !m.content.startsWith('> [')) {
+      out.push({ role: 'user', content: m.content.slice(2) })
+    } else if (m.type === 'done' && m.content.trim()) {
+      out.push({ role: 'assistant', content: parseThinking(m.content).response.trim() || m.content })
+    }
+  }
+  return out.slice(-60)
 }

@@ -3,6 +3,6 @@ dist/
 *.js.map
 .env
 .env.local
-.claude
+./claude
 .claude/
 vscode-extension/

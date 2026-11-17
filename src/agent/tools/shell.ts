@@ -1,9 +1,11 @@
-import { exec } from 'child_process'
-import { promisify } from 'util'
+import { spawn } from 'child_process'
 import { normalize } from 'path'
 import { ToolResult } from '../../shared/types'
 
-const execAsync = promisify(exec)
+/** A command that runs longer than this is stopped. */
+const TIMEOUT_MS = 60_000
+/** Output kept for the result; the live view shows it as it arrives anyway. */
+const MAX_OUTPUT_CHARS = 10 * 1024 * 1024
 
 export function getShell(): string {
   if (process.platform === 'win32') return 'powershell.exe'
@@ -17,34 +19,80 @@ export function shellPath(p: string): string {
   return p.replace(/\\/g, '/')
 }
 
-export async function runShell(command: string, cwd: string): Promise<ToolResult> {
-  if (!command.trim()) return { success: false, output: '', error: 'run_shell: command is empty' }
-  const normalizedCwd = shellPath(cwd)
-  try {
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: normalizedCwd,
-      timeout: 60000,
-      maxBuffer: 1024 * 1024 * 10,
-      shell: getShell(),
-    })
-    const output = stdout + (stderr ? `\nSTDERR:\n${stderr}` : '')
-    return { success: true, output: output.trim() || '(no output)' }
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string; code?: number | string; killed?: boolean }
-    if (e.killed || String(e.message).includes('ETIMEDOUT') || String(e.message).includes('timed out')) {
-      return {
-        success: false,
-        output: e.stdout?.trim() || '',
-        error: `Command timed out after 60 s: ${command.slice(0, 80)}\n  Use a faster command or split it into smaller steps.`,
-      }
-    }
-    const stderr = (e.stderr || '').trim()
-    const stdout = (e.stdout || '').trim()
-    const code   = e.code !== undefined ? ` (exit code ${e.code})` : ''
-    return {
-      success: false,
-      output: stdout,
-      error: stderr || e.message || `Command failed${code}`,
-    }
+/**
+ * Run `command` in the user's shell. `onOutput`, if given, receives stdout and
+ * stderr as they arrive — that is what the live view under a running command
+ * shows. The result has the same shape as before: stdout, plus stderr under a
+ * "STDERR:" marker, or an error with the exit code.
+ */
+export function runShell(
+  command: string,
+  cwd: string,
+  onOutput?: (chunk: string) => void,
+): Promise<ToolResult> {
+  if (!command.trim()) {
+    return Promise.resolve({ success: false, output: '', error: 'run_shell: command is empty' })
   }
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let settled = false
+    const finish = (r: ToolResult) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(r)
+    }
+
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command, { cwd: shellPath(cwd), shell: getShell(), windowsHide: true })
+    } catch (err) {
+      finish({ success: false, output: '', error: `Could not start the shell: ${String(err)}` })
+      return
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill()
+    }, TIMEOUT_MS)
+
+    const take = (which: 'out' | 'err') => (data: Buffer) => {
+      const text = data.toString('utf8')
+      if (which === 'out') {
+        if (stdout.length < MAX_OUTPUT_CHARS) stdout += text
+      } else if (stderr.length < MAX_OUTPUT_CHARS) {
+        stderr += text
+      }
+      onOutput?.(text)
+    }
+    child.stdout?.on('data', take('out'))
+    child.stderr?.on('data', take('err'))
+
+    child.on('error', (err) => {
+      finish({ success: false, output: stdout.trim(), error: `Could not run the command: ${err.message}` })
+    })
+
+    child.on('close', (code) => {
+      if (timedOut) {
+        finish({
+          success: false,
+          output: stdout.trim(),
+          error: `Command timed out after ${TIMEOUT_MS / 1000} s: ${command.slice(0, 80)}\n  Use a faster command or split it into smaller steps.`,
+        })
+        return
+      }
+      if (code === 0) {
+        const output = stdout + (stderr ? `\nSTDERR:\n${stderr}` : '')
+        finish({ success: true, output: output.trim() || '(no output)' })
+        return
+      }
+      finish({
+        success: false,
+        output: stdout.trim(),
+        error: stderr.trim() || `Command failed (exit code ${code})`,
+      })
+    })
+  })
 }

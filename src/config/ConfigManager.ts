@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { createHash } from 'crypto'
 import { AppConfig, LLMConfig, AgentMessage } from '../shared/types'
 import { DEFAULT_CONFIG } from '../shared/constants'
 
@@ -8,6 +9,8 @@ const CONFIG_DIR    = path.join(os.homedir(), '.localcode')
 const CONFIG_FILE   = path.join(CONFIG_DIR, 'config.json')
 const HISTORY_FILE  = path.join(CONFIG_DIR, 'history.json')
 const SESSIONS_DIR  = path.join(CONFIG_DIR, 'sessions')
+/** Automatic per-project saves; hidden from /session list. */
+const AUTOSAVE_PREFIX = 'autosave-'
 
 export class ConfigManager {
   private static instance: ConfigManager
@@ -87,11 +90,28 @@ export class ConfigManager {
     if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true })
   }
 
+  /**
+   * The file for a session name. Names are reduced to letters, digits, "-",
+   * "_" and "." — the name used to go into the path as typed, so
+   * "/session save ../../x" wrote outside the sessions folder.
+   */
+  private sessionFile(name: string): string | null {
+    const safe = name.trim().replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(0, 80)
+    return safe ? path.join(SESSIONS_DIR, `${safe}.json`) : null
+  }
+
+  /** The automatic save of the session in `cwd` (used by --continue). */
+  autosaveName(cwd: string): string {
+    const hash = createHash('sha1').update(path.resolve(cwd).toLowerCase()).digest('hex').slice(0, 8)
+    return `${AUTOSAVE_PREFIX}${path.basename(cwd) || 'root'}-${hash}`
+  }
+
+  /** Saved sessions, without the automatic per-project saves. */
   listSessions(): string[] {
     try {
       this.ensureSessions()
       return fs.readdirSync(SESSIONS_DIR)
-        .filter(f => f.endsWith('.json'))
+        .filter(f => f.endsWith('.json') && !f.startsWith(AUTOSAVE_PREFIX))
         .map(f => f.slice(0, -5))
         .sort()
     } catch { return [] }
@@ -100,15 +120,16 @@ export class ConfigManager {
   saveSession(name: string, messages: AgentMessage[]): void {
     try {
       this.ensureSessions()
-      const file = path.join(SESSIONS_DIR, `${name}.json`)
+      const file = this.sessionFile(name)
+      if (!file) return
       fs.writeFileSync(file, JSON.stringify(messages, null, 2), 'utf-8')
     } catch {}
   }
 
   loadSession(name: string): AgentMessage[] | null {
     try {
-      const file = path.join(SESSIONS_DIR, `${name}.json`)
-      if (!fs.existsSync(file)) return null
+      const file = this.sessionFile(name)
+      if (!file || !fs.existsSync(file)) return null
       return JSON.parse(fs.readFileSync(file, 'utf-8')) as AgentMessage[]
     } catch { return null }
   }
@@ -168,8 +189,8 @@ export class ConfigManager {
 
   deleteSession(name: string): void {
     try {
-      const file = path.join(SESSIONS_DIR, `${name}.json`)
-      if (fs.existsSync(file)) fs.unlinkSync(file)
+      const file = this.sessionFile(name)
+      if (file && fs.existsSync(file)) fs.unlinkSync(file)
     } catch {}
   }
 }
