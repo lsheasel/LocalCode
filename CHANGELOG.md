@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.1](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.8.0...localcode-agent-v0.8.1) (2026-11-17)
+
+
+### 📖 Documentation
+
+* how to write commits and highlights that make good release notes ([a5722a1](https://github.com/lsheasel/LocalCode/commit/a5722a1dbb0b5efe9d7a04618852337c58026552))
+* resolve a leftover merge conflict in the changelog ([a5722a1](https://github.com/lsheasel/LocalCode/commit/a5722a1dbb0b5efe9d7a04618852337c58026552))
+
+
+### 🔧 Under the hood
+
+* put hand-written highlights from .github/release-notes at the top of each GitHub release ([a5722a1](https://github.com/lsheasel/LocalCode/commit/a5722a1dbb0b5efe9d7a04618852337c58026552))
+* sort release notes into features, fixes, performance, docs and under the hood ([a5722a1](https://github.com/lsheasel/LocalCode/commit/a5722a1dbb0b5efe9d7a04618852337c58026552))
+
 ## [0.8.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.7.0...localcode-agent-v0.8.0) (2026-11-17)
 
 
