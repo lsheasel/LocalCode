@@ -12,6 +12,9 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v4
       - name: Read package.json version
@@ -47,3 +50,11 @@ jobs:
             cat generated.md
           } > release.md
           gh release edit "$TAG" --notes-file release.md
+
+  # The installable package, attached to the new release.
+  package:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/release-tarball.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

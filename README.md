@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/localcode-agent"><img src="https://img.shields.io/npm/v/localcode-agent?color=5FA8FF&label=npm" alt="npm version" /></a>
+  <a href="https://github.com/lsheasel/LocalCode/releases/latest"><img src="https://img.shields.io/github/package-json/v/lsheasel/LocalCode?color=5FA8FF&label=version" alt="Latest version" /></a>
   <img src="https://img.shields.io/badge/Node.js-18%2B-5FA8FF" alt="Node.js 18+" />
   <img src="https://img.shields.io/badge/runs%20on-Ollama%20%7C%20LM%20Studio-5FA8FF" alt="Runs on Ollama or LM Studio" />
   <img src="https://img.shields.io/badge/license-MIT-5FA8FF" alt="MIT license" />
@@ -35,10 +35,12 @@
 You need [Node.js 18+](https://nodejs.org) and a model running in [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai).
 
 ```bash
-npm install -g localcode-agent
+npm install -g https://github.com/lsheasel/LocalCode/releases/latest/download/localcode-agent.tgz
 cd your-project
 localcode
 ```
+
+That link always installs the newest release. To update later, run the same command again (LocalCode also tells you when a new version is out).
 
 Out of the box it talks to Ollama on its default port. Using LM Studio or a different model? Run `/connect` or `/model` once and it remembers. Then type what you want done.
 

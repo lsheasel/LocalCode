@@ -64,3 +64,18 @@ describe('checkpoints', () => {
     expect(existsSync(created)).toBe(false)
   })
 })
+
+import { versionOf, semverGt } from '../../src/shared/updateChecker'
+
+describe('update check versions', () => {
+  it('reads release-please tags', () => {
+    expect(versionOf('localcode-agent-v0.8.1')).toBe('0.8.1')
+    expect(versionOf('v1.2.3')).toBe('1.2.3')
+    expect(versionOf('nonsense')).toBeNull()
+  })
+  it('compares versions, not tag text', () => {
+    expect(semverGt('localcode-agent-v0.8.1', '0.8.0')).toBe(true)
+    expect(semverGt('localcode-agent-v0.8.0', '0.8.0')).toBe(false)
+    expect(semverGt('0.10.0', '0.9.9')).toBe(true)
+  })
+})

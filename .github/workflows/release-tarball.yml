@@ -1,0 +1,50 @@
+name: Release package
+
+# Builds the npm package and attaches it to a GitHub release, so LocalCode
+# can be installed without the npm registry:
+#
+#   npm install -g https://github.com/lsheasel/LocalCode/releases/latest/download/localcode-agent.tgz
+#
+# Runs on its own for every release (called from release-please.yml). To add
+# the package to an existing release, run it by hand from the Actions tab and
+# enter the release tag, e.g. localcode-agent-v0.8.1.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. localcode-agent-v0.8.1'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Pack and attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          FILE=$(npm pack --silent | tail -1)
+          # A fixed name too, so .../releases/latest/download/localcode-agent.tgz
+          # always points at the newest version.
+          cp "$FILE" localcode-agent.tgz
+          gh release upload "$TAG" "$FILE" localcode-agent.tgz --clobber

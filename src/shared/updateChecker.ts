@@ -7,6 +7,12 @@ const CHECK_INTERVAL = 1000 * 60 * 60 * 6  // 6 hours
 
 const NPM_PACKAGE  = 'localcode-agent'
 const GITHUB_REPO  = 'lsheasel/LocalCode'
+/**
+ * New versions are published as GitHub releases with the npm package
+ * attached (.github/workflows/release-tarball.yml). This URL always points at
+ * the newest one, and npm installs it like any other package.
+ */
+export const INSTALL_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/${NPM_PACKAGE}.tgz`
 
 interface UpdateCache {
   checkedAt: number
@@ -46,14 +52,23 @@ function updateCommandFor(method: 'npm' | 'git', repoDir?: string): string {
     const dir = repoDir ?? '~/LocalCode'
     return `cd ${dir} && git pull && npm install && npm run build`
   }
-  return `npm install -g ${NPM_PACKAGE}`
+  return `npm install -g ${INSTALL_URL}`
 }
 
 // ── Semver helper ────────────────────────────────────────────────────────────
 
-function semverGt(a: string, b: string): boolean {
-  const pa = a.replace(/^v/, '').split('.').map(Number)
-  const pb = b.replace(/^v/, '').split('.').map(Number)
+/**
+ * "1.2.3" from a version or a release tag. release-please tags look like
+ * "localcode-agent-v0.8.1", so a leading "v" is not the only prefix.
+ */
+export function versionOf(tag: string): string | null {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(tag)
+  return m ? m[0] : null
+}
+
+export function semverGt(a: string, b: string): boolean {
+  const pa = (versionOf(a) ?? '0.0.0').split('.').map(Number)
+  const pb = (versionOf(b) ?? '0.0.0').split('.').map(Number)
   for (let i = 0; i < 3; i++) {
     const na = pa[i] ?? 0
     const nb = pb[i] ?? 0
@@ -100,7 +115,7 @@ async function fetchGitHubLatest(): Promise<string | null> {
     })
     if (!res.ok) return null
     const data = (await res.json()) as { tag_name?: string }
-    return typeof data.tag_name === 'string' ? data.tag_name.replace(/^v/, '') : null
+    return typeof data.tag_name === 'string' ? versionOf(data.tag_name) : null
   } catch { return null }
 }
 
@@ -114,9 +129,9 @@ async function fetchGitHubLatest(): Promise<string | null> {
 export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo | null> {
   const installMethod = detectInstallMethod()
 
-  // Return cached result if still fresh
+  // Return cached result if still fresh (and made for the same kind of install)
   const cache = readCache()
-  if (cache && Date.now() - cache.checkedAt < CHECK_INTERVAL) {
+  if (cache && cache.installMethod === installMethod && Date.now() - cache.checkedAt < CHECK_INTERVAL) {
     if (cache.latestVersion && semverGt(cache.latestVersion, currentVersion)) {
       return {
         latestVersion: cache.latestVersion,
@@ -127,15 +142,10 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
     return null
   }
 
-  // Fetch from both sources in parallel; take the highest version found
-  const [npmVer, ghVer] = await Promise.all([
-    fetchNpmLatest(),
-    fetchGitHubLatest(),
-  ])
-
-  let latest: string | null = null
-  if (npmVer && (!latest || semverGt(npmVer, latest))) latest = npmVer
-  if (ghVer  && (!latest || semverGt(ghVer,  latest))) latest = ghVer
+  // Releases happen on GitHub, and both kinds of install update from there
+  // (npm through INSTALL_URL). The npm registry is only a fallback for when
+  // GitHub can't be reached.
+  const latest = (await fetchGitHubLatest()) ?? (await fetchNpmLatest())
 
   writeCache({ checkedAt: Date.now(), latestVersion: latest, installMethod })
 
