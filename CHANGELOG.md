@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.8.1...localcode-agent-v0.9.0) (2026-11-18)
+
+
+### ✨ Features
+
+* install from GitHub releases with npm install -g https://github.com/lsheasel/LocalCode/releases/latest/download/localcode-agent.tgz ([d373fe2](https://github.com/lsheasel/LocalCode/commit/d373fe20b0ab238b2d902cf80fc51b483258c405))
+
+
+### 🐛 Bug Fixes
+
+* the update notice offers a command that really installs the new version ([d373fe2](https://github.com/lsheasel/LocalCode/commit/d373fe20b0ab238b2d902cf80fc51b483258c405))
+* the update notice shows the version number instead of the release tag ([d373fe2](https://github.com/lsheasel/LocalCode/commit/d373fe20b0ab238b2d902cf80fc51b483258c405))
+
+
+### 📖 Documentation
+
+* install instructions point at the latest release; palette screenshot with the new command order ([d373fe2](https://github.com/lsheasel/LocalCode/commit/d373fe20b0ab238b2d902cf80fc51b483258c405))
+
+
+### 🔧 Under the hood
+
+* attach the npm package to every GitHub release ([d373fe2](https://github.com/lsheasel/LocalCode/commit/d373fe20b0ab238b2d902cf80fc51b483258c405))
+
 ## [0.8.1](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.8.0...localcode-agent-v0.8.1) (2026-11-17)
 
 
