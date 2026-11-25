@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.9.0...localcode-agent-v0.10.0) (2026-11-25)
+
+
+### ✨ Features
+
+* add settings management and UI configuration ([035b320](https://github.com/lsheasel/LocalCode/commit/035b3204306cca99c200ffef34909bb81dd5c7e6))
+
 ## [0.9.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.8.1...localcode-agent-v0.9.0) (2026-11-18)
 
 
