@@ -13,7 +13,8 @@ import { CommandPicker } from "./components/CommandPicker";
 import { CommandPalette, PaletteItem } from "./components/CommandPalette";
 import { HelpOverlay } from "./components/HelpOverlay";
 import { Logo, Tip, LOGO_WIDTH, LOGO_HEIGHT } from "./components/Logo";
-import { HistoryItem, estimateHeight, transcriptItems } from "./components/HistoryItem";
+import { HistoryItem, estimateHeight, transcriptItems, RowAction, TranscriptItem } from "./components/HistoryItem";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { Fieldset } from "./components/Fieldset";
 import { PromptEditor, promptEditorRows } from "./components/PromptEditor";
 import { Sidebar } from "./components/Sidebar";
@@ -24,11 +25,17 @@ import { AgentMessage, ToolCall, Attachment } from "./shared/types";
 import { BUILTIN_COMMANDS } from "./shared/constants";
 import { checkForUpdate, UpdateInfo } from "./shared/updateChecker";
 import { getAppVersion } from "./shared/version";
-import { parseThinking, getSuggestion, getItemWindow, truncEnd, formatTokens } from "./shared/utils";
+import { parseThinking, getSuggestion, getItemWindow, truncEnd, formatTokens, answerText } from "./shared/utils";
 import { editKey, EditorState } from "./shared/lineEditor";
 import { loadAttachment, listCwdFiles } from "./shared/attachments";
 import { theme, modeColors, ICON, Mode, THREAD_BORDER } from "./shared/theme";
-import { resolveUiMode, footerHints } from "./shared/keymap";
+import { resolveUiMode, footerHints, Hint } from "./shared/keymap";
+import { HitClip, refreshHover, setPanes, useHitbox, pointerLeave } from "./shared/mouse";
+import { animationsOn, setAnimations, useColorTween, mix, useTween } from "./shared/anim";
+import { copyToClipboard } from "./shared/clipboard";
+import { prefs } from "./shared/settings";
+import { discordPresence } from "./discord/DiscordPresence";
+import { lspInstallEvents, serverLabel } from "./lsp/installer";
 import { globalCommandRegistry } from "./plugins/registry.js";
 import { useSlashCommands, conversationFrom } from "./hooks/useSlashCommands";
 import { loadInstructions } from "./agent/projectInstructions";
@@ -45,8 +52,13 @@ interface AppProps {
   cwd: string;
   /** Start by picking up the last session in this folder (--continue). */
   resume?: boolean;
-  /** Mouse wheel steps (-1 up, +1 down) from the fullscreen input proxy. */
+  /**
+   * Mouse events from the fullscreen input proxy: 'wheel' steps (-1 up, +1
+   * down) and 'copied' with the text a drag selected.
+   */
   wheel?: import("events").EventEmitter;
+  /** Turn mouse reporting on or off (settings: interface → mouse). */
+  setMouse?: (on: boolean) => void;
   onStatusChange?: (status: string, cwd: string) => void;
 }
 
@@ -79,6 +91,7 @@ export const App: React.FC<AppProps> = ({
   cwd,
   resume,
   wheel,
+  setMouse,
   onStatusChange,
 }) => {
   const { exit } = useApp();
@@ -131,6 +144,11 @@ export const App: React.FC<AppProps> = ({
   } | null>(null);
   const [infoScroll, setInfoScroll] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** "copied 120 characters" under the prompt, fading out. */
+  const [flash, setFlash] = useState<{ id: number; text: string } | null>(null);
+  /** Bumped when /settings changes something the screen shows. */
+  const [, setConfigVersion] = useState(0);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   /** Rows the transcript is scrolled up from the bottom (0 = following). */
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -218,7 +236,7 @@ export const App: React.FC<AppProps> = ({
 
   // Exactly one mode owns the keyboard — see shared/keymap.ts.
   const uiMode = resolveUiMode({
-    popupOpen: connectPopup || modelPicker || filePicker || paletteOpen,
+    popupOpen: connectPopup || modelPicker || filePicker || paletteOpen || settingsOpen,
     helpOpen,
     infoOpen: !!infoPopup,
     confirmOpen: !!confirm,
@@ -242,6 +260,7 @@ export const App: React.FC<AppProps> = ({
 
   // New output follows the bottom of the transcript.
   useEffect(() => {
+    scrollTargetRef.current = 0;
     setScrollOffset(0);
   }, [messages.length]);
 
@@ -286,9 +305,40 @@ export const App: React.FC<AppProps> = ({
 
   // Background update check — runs once on mount, non-blocking
   useEffect(() => {
+    if (!prefs(cm.get()).updateCheck) return;
     checkForUpdate(getAppVersion()).then((info) => {
       if (info) setUpdateInfo(info);
     });
+  }, []);
+
+  // Language servers being installed (on first use, or /lsp install): show
+  // the installer's output live, then what came of it.
+  useEffect(() => {
+    let text = "";
+    const onStart = (name: string) => {
+      text = "";
+      setLiveOutput({ title: `install ${serverLabel(name)}`, text: "" });
+    };
+    const onOutput = (name: string, chunk: string) => {
+      text = (text + chunk).slice(-8000);
+      setLiveOutput({ title: `install ${serverLabel(name)}`, text });
+    };
+    const onDone = (name: string, ok: boolean, message: string) => {
+      setLiveOutput(null);
+      addMsg(
+        ok
+          ? { type: "command", commandTitle: `installed ${serverLabel(name)}`, content: `  ${message}` }
+          : { type: "error", content: message },
+      );
+    };
+    lspInstallEvents.on("start", onStart);
+    lspInstallEvents.on("output", onOutput);
+    lspInstallEvents.on("done", onDone);
+    return () => {
+      lspInstallEvents.off("start", onStart);
+      lspInstallEvents.off("output", onOutput);
+      lspInstallEvents.off("done", onDone);
+    };
   }, []);
 
   useEffect(() => {
@@ -317,6 +367,32 @@ export const App: React.FC<AppProps> = ({
       { ...msg, id: nextId(), timestamp: Date.now() },
     ]);
   }, []);
+
+  /** Put text on the clipboard and say so under the prompt. */
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showFlash = useCallback((text: string) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlash({ id: Date.now(), text });
+    flashTimerRef.current = setTimeout(() => setFlash(null), 2400);
+  }, []);
+  const copyText = useCallback((text: string, what: string) => {
+    copyToClipboard(text).catch(() => undefined);
+    const lines = text.split("\n").length;
+    showFlash(`copied ${what}${lines > 1 ? `, ${lines} lines` : ""}`);
+  }, []);
+
+  // A drag that selected text (shared/screen.ts copies it).
+  useEffect(() => {
+    if (!wheel) return;
+    const onCopied = (text: string) => {
+      const lines = text.split("\n").length;
+      showFlash(`copied ${lines > 1 ? `${lines} lines` : `${text.length} characters`}`);
+    };
+    wheel.on("copied", onCopied);
+    return () => {
+      wheel.off("copied", onCopied);
+    };
+  }, [wheel]);
 
   /** Pick up the last session in this folder. */
   const continueSession = useCallback(() => {
@@ -430,6 +506,9 @@ export const App: React.FC<AppProps> = ({
     setInfoScroll,
     setContextTokens,
     setLiveOutput,
+    setSettingsOpen,
+    setHelpOpen,
+    copyText,
     s,
     agentRef,
     taskQueueRef,
@@ -513,6 +592,7 @@ export const App: React.FC<AppProps> = ({
     !modelPicker &&
     !filePicker &&
     !paletteOpen &&
+    !settingsOpen &&
     !liveOutput;
   const splashPanelW = Math.max(24, Math.min(SPLASH_PANEL_WIDTH, termCols - 4));
   const showSidebar = !showSplash && termCols >= SIDEBAR_MIN_COLS;
@@ -569,9 +649,44 @@ export const App: React.FC<AppProps> = ({
   const maxScroll = Math.max(0, knownTotal - viewRows);
   const safeOffset = Math.min(scrollOffset, maxScroll);
   const win = getItemWindow(heights, viewRows, safeOffset);
+  // Scrolling glides: the wheel and PgUp/PgDn move a target, and the view
+  // eases toward it a few rows per frame.
+  const maxScrollRef = useRef(maxScroll);
+  maxScrollRef.current = maxScroll;
+  const scrollTargetRef = useRef(0);
+  const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scrollTo = (target: number) => {
+    scrollTargetRef.current = Math.max(0, Math.min(maxScrollRef.current, target));
+    if (!animationsOn()) {
+      setScrollOffset(scrollTargetRef.current);
+      return;
+    }
+    if (scrollTimerRef.current) return;
+    scrollTimerRef.current = setInterval(() => {
+      setScrollOffset((cur) => {
+        const goal = Math.min(scrollTargetRef.current, maxScrollRef.current);
+        const from = Math.min(cur, maxScrollRef.current);
+        const diff = goal - from;
+        if (Math.abs(diff) <= 1) {
+          if (scrollTimerRef.current) clearInterval(scrollTimerRef.current);
+          scrollTimerRef.current = null;
+          return goal;
+        }
+        return from + Math.sign(diff) * Math.max(1, Math.round(Math.abs(diff) * 0.35));
+      });
+    }, 16);
+  };
+  useEffect(
+    () => () => {
+      if (scrollTimerRef.current) clearInterval(scrollTimerRef.current);
+    },
+    [],
+  );
+  /** The scroll position the view is heading for (or at). */
+  const scrollGoal = () => (scrollTimerRef.current ? scrollTargetRef.current : safeOffset);
   /** Scroll up by n rows, never past the top of the transcript. */
-  const scrollUp = (n: number) => setScrollOffset(() => Math.min(safeOffset + n, maxScroll));
-  const scrollDown = (n: number) => setScrollOffset(() => Math.max(0, safeOffset - n));
+  const scrollUp = (n: number) => scrollTo(scrollGoal() + n);
+  const scrollDown = (n: number) => scrollTo(scrollGoal() - n);
 
   useEffect(() => {
     const viewH = viewportRef.current ? measureElement(viewportRef.current).height : 0;
@@ -589,7 +704,7 @@ export const App: React.FC<AppProps> = ({
   onWheelRef.current = (dir: number) => {
     if (infoPopup) {
       setInfoScroll((v) => Math.max(0, Math.min(infoMaxScroll, v + dir * 3)));
-    } else if (!helpOpen && !paletteOpen) {
+    } else if (!helpOpen && !paletteOpen && !settingsOpen) {
       if (dir < 0) scrollUp(3);
       else scrollDown(3);
     }
@@ -602,6 +717,16 @@ export const App: React.FC<AppProps> = ({
       wheel.off("wheel", onWheel);
     };
   }, [wheel]);
+
+  // The layout changes under a resting mouse (scrolling, new output): keep
+  // hover on whatever is under it now. And tell drag-to-select where the
+  // columns are, so a selection stays in the one it started in.
+  useEffect(() => {
+    refreshHover();
+  });
+  useEffect(() => {
+    setPanes(showSidebar ? [[0, mainW], [mainW, termCols]] : [[0, termCols]]);
+  }, [showSidebar, mainW, termCols]);
 
   /** Live answer lines shown at the bottom of the transcript while streaming. */
   const maxStreamLines = Math.max(4, Math.floor(viewRows * 0.75));
@@ -623,6 +748,15 @@ export const App: React.FC<AppProps> = ({
       return;
     }
     handleSubmit(value);
+  };
+
+  /** A command in the / menu was clicked: run it, or insert it if it takes an argument. */
+  const pickCommand = (i: number) => {
+    const sel = slashCmds[i];
+    if (!sel) return;
+    setPickerIdx(0);
+    if (sel.cmd.endsWith(" ")) setEditor(sel.cmd);
+    else handleSubmit(sel.cmd.trim());
   };
 
   /** Palette choice → the matching action. */
@@ -649,6 +783,125 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
+  /** Stop the running agent (ctrl+c, or a click on "ctrl+c stop"). */
+  const abortRun = () => {
+    if (!agentRef.current) return false;
+    agentRef.current.abort();
+    agentRef.current = null;
+    taskQueueRef.current = [];
+    if (tokenFlushRef.current) {
+      clearTimeout(tokenFlushRef.current);
+      tokenFlushRef.current = null;
+    }
+    tokenBufRef.current = "";
+    tokenCntRef.current = 0;
+    setAgentStatus("idle");
+    setCurrentTokens("");
+    setConfirm(null);
+    setLiveOutput(null);
+    addMsg({ type: "error", content: "Aborted." });
+    return true;
+  };
+
+  /** A hint under the prompt was clicked: do what its key does. */
+  const onHint = (h: Hint) => {
+    switch (h.keys) {
+      case "?":
+        setHelpOpen(true);
+        return;
+      case "ctrl+p":
+        setPaletteOpen(true);
+        return;
+      case "ctrl+o":
+        showLastReasoning();
+        return;
+      case "ctrl+b":
+        showLastToolOutput();
+        return;
+      case "ctrl+c":
+        abortRun();
+        return;
+      case "tab":
+        if (suggestion) setEditor(inputValue + suggestion);
+        else cycleMode(false);
+        return;
+      case "esc":
+        if (helpOpen) setHelpOpen(false);
+        else if (infoPopup) {
+          setInfoPopup(null);
+          setInfoScroll(0);
+        } else if (showPicker) clearInput();
+        return;
+      case "enter":
+        if (showPicker) submitPrompt(inputValue);
+        return;
+      default:
+        if (h.keys.startsWith("/")) handleSubmit(h.keys);
+    }
+  };
+
+  /** The full output of one step, in the popup. */
+  const showStepOutput = (item: TranscriptItem) => {
+    const { msg, next } = item;
+    if (msg.type === "command") {
+      showInfo(msg.commandTitle || "output", msg.content.replace(/\n+$/, "").split("\n"));
+      return;
+    }
+    const result =
+      msg.type === "tool_result" ? msg : next?.type === "tool_result" && next.toolCall?.tool === msg.toolCall?.tool ? next : undefined;
+    const call = msg.toolCall;
+    if (!call) return;
+    const args = JSON.stringify(call.arguments, null, 2).split("\n");
+    const body = !result
+      ? ["  (still running)"]
+      : result.toolResult?.success
+        ? (result.toolResult.output || "(no output)").split("\n")
+        : [`error: ${result.toolResult?.error || "unknown"}`];
+    const meta = result?.toolResult?.meta;
+    const diff = meta?.diffPath
+      ? [
+          "",
+          ...(meta.diffOld ?? []).map((l: string) => `-${l}`),
+          ...(meta.diffNew ?? []).map((l: string) => `+${l}`),
+        ]
+      : [];
+    showInfo(call.tool, [`**${call.tool}**`, ...args.map((l) => "  " + l), "", ...body.slice(0, 2000), ...diff]);
+  };
+
+  const onRowAction = (action: RowAction, item: TranscriptItem) => {
+    if (action === "open") showStepOutput(item);
+    else if (action === "copy") copyText(answerText(item.msg.content), "the answer");
+    else if (action === "reuse" && !isRunning) setEditor(item.msg.content.slice(2).replace(/\s+\[[^\]]*\]$/, ""));
+  };
+
+  /** /settings changed something: apply what can't wait for a restart. */
+  const onSettingChanged = (id: string) => {
+    const p = prefs(cm.get());
+    if (id === "animations") setAnimations(p.animations);
+    if (id === "mouse") {
+      setMouse?.(p.mouse);
+      if (!p.mouse) pointerLeave();
+    }
+    if (id === "discord") {
+      if (p.discord) discordPresence.connect().then(() => discordPresence.update(agentStatus, cwd)).catch(() => undefined);
+      else discordPresence.destroy().catch(() => undefined);
+    }
+    setConfigVersion((n) => n + 1);
+  };
+
+  const onSettingAction = (id: string) => {
+    if (id === "model") {
+      setSettingsOpen(false);
+      handleSubmit("/model");
+    } else if (id === "trusted") {
+      setSettingsOpen(false);
+      handleSubmit("/trust");
+    } else if (id === "rules") {
+      setSettingsOpen(false);
+      handleSubmit(rules.length ? "/rules" : "/init");
+    }
+  };
+
   // ── Keyboard ────────────────────────────────────────────────────────────────
   // One handler per UI mode, dispatched on the mode that owns the keyboard.
   // Modes are exclusive, so a key can never be claimed by two handlers.
@@ -662,6 +915,7 @@ export const App: React.FC<AppProps> = ({
           setModelPicker(false);
           setFilePicker(false);
           setPaletteOpen(false);
+          setSettingsOpen(false);
           return;
         case "help":
           setHelpOpen(false);
@@ -671,21 +925,8 @@ export const App: React.FC<AppProps> = ({
           setInfoScroll(0);
           return;
         default:
-          if (agentRef.current) {
-            agentRef.current.abort();
-            agentRef.current = null;
-            taskQueueRef.current = [];
-            if (tokenFlushRef.current) {
-              clearTimeout(tokenFlushRef.current);
-              tokenFlushRef.current = null;
-            }
-            tokenBufRef.current = "";
-            tokenCntRef.current = 0;
-            setAgentStatus("idle");
-            setCurrentTokens("");
-            setConfirm(null);
-            setLiveOutput(null);
-            addMsg({ type: "error", content: "Aborted." });
+          if (abortRun()) {
+            // stopped
           } else if (inputValue) {
             clearInput();
           } else {
@@ -791,7 +1032,7 @@ export const App: React.FC<AppProps> = ({
           return;
         }
         if (key.escape) {
-          if (inputValue === "" && safeOffset > 0) setScrollOffset(0);
+          if (inputValue === "" && safeOffset > 0) scrollTo(0);
           else clearInput();
           return;
         }
@@ -876,12 +1117,15 @@ export const App: React.FC<AppProps> = ({
     };
   })();
 
+  // The mode colour blends into the next one when tab switches modes.
+  const modeAccent = useColorTween(modeColors[mode].accent, 260);
+
   // ── Prompt frame ───────────────────────────────────────────────────────────
   //   ┌─ build ─────────────── qwen3.5-9b  lm studio ─┐
   //   │ ▍Ask anything                                  │
   //   └──────────────────────────────── LocalCode:main ─┘
   const renderPrompt = (width: number) => {
-    const color = isRunning ? theme.textFaint : modeColors[mode].accent;
+    const color = isRunning ? theme.textFaint : modeAccent;
     const placeholder = isRunning
       ? "Add a message for the agent"
       : mode === "plan"
@@ -897,7 +1141,7 @@ export const App: React.FC<AppProps> = ({
       <Fieldset
         width={width}
         color={theme.border}
-        title={[{ text: modeColors[mode].label, color: modeColors[mode].accent }]}
+        title={[{ text: modeColors[mode].label, color: modeAccent }]}
         right={[
           { text: modelText, color: theme.textMuted },
           { text: "  " + providerName.toLowerCase(), color: theme.textFaint },
@@ -935,6 +1179,8 @@ export const App: React.FC<AppProps> = ({
     <Footer
       width={width}
       hints={hints}
+      onHint={onHint}
+      flash={flash}
       busy={
         isRunning ? (
           <Working
@@ -956,14 +1202,14 @@ export const App: React.FC<AppProps> = ({
 
   const renderUpdateBanner = () =>
     updateInfo ? (
-      <Box paddingX={1} flexShrink={0}>
-        <Text wrap="truncate-end">
-          <Text color={theme.warn}>Update available  </Text>
-          <Text color={theme.textMuted}>{getAppVersion()} → {updateInfo.latestVersion}</Text>
-          <Text color={theme.textFaint}>   run </Text>
-          <Text color={theme.textBright}>{updateInfo.updateCommand}</Text>
-        </Text>
-      </Box>
+      <UpdateBanner
+        current={getAppVersion()}
+        latest={updateInfo.latestVersion}
+        onClick={() => {
+          setUpdateInfo(null);
+          handleSubmit("/update");
+        }}
+      />
     ) : null;
 
   // ── Live answer at the bottom of the transcript ───────────────────────────
@@ -1066,29 +1312,24 @@ export const App: React.FC<AppProps> = ({
           width={contentW}
           marginBottom={-Math.max(0, safeOffset - win.linesBelow)}
         >
-          {items.slice(win.start, win.end).map((it) => (
-            <HistoryItem
-              key={it.msg.id}
-              item={it}
-              model={llm.model}
-              mode={mode}
-              debugMode={mode === "debug"}
-              width={contentW}
-            />
-          ))}
+          <HitClip.Provider value={viewportRef}>
+            {items.slice(win.start, win.end).map((it) => (
+              <HistoryItem
+                key={it.msg.id}
+                item={it}
+                model={llm.model}
+                mode={mode}
+                debugMode={mode === "debug"}
+                width={contentW}
+                onAction={onRowAction}
+              />
+            ))}
+          </HitClip.Provider>
           {renderLiveOutput()}
           {renderStream()}
         </Box>
       </Box>
-      {safeOffset > 0 && (
-        <Box paddingX={1} flexShrink={0}>
-          <Text wrap="truncate-end">
-            <Text color={theme.textFaint}>{ICON.down} </Text>
-            <Text color={theme.textMuted}>{safeOffset} lines below</Text>
-            <Text color={theme.textFaint}>   esc  back to the latest</Text>
-          </Text>
-        </Box>
-      )}
+      {safeOffset > 0 && <BelowNotice lines={safeOffset} onClick={() => scrollTo(0)} />}
     </Box>
   );
 
@@ -1151,7 +1392,13 @@ export const App: React.FC<AppProps> = ({
           {renderPrompt(splashPanelW)}
           {showPicker && (
             <Box width={splashPanelW} flexDirection="column" flexShrink={0}>
-              <CommandPicker commands={slashCmds} selectedIdx={pickerIdx} width={splashPanelW} />
+              <CommandPicker
+                commands={slashCmds}
+                selectedIdx={pickerIdx}
+                width={splashPanelW}
+                onHover={setPickerIdx}
+                onPick={pickCommand}
+              />
             </Box>
           )}
           <Box width={splashPanelW} flexShrink={0}>
@@ -1186,10 +1433,18 @@ export const App: React.FC<AppProps> = ({
         {renderUpdateBanner()}
         {showHeader && renderHeader()}
 
-        {helpOpen || infoPopup || paletteOpen ? (
+        {helpOpen || infoPopup || paletteOpen || settingsOpen ? (
           <Box flexGrow={1} minHeight={0} flexDirection="column" justifyContent="flex-end">
             {helpOpen ? (
               <HelpOverlay termCols={contentW} maxRows={overlayRows} />
+            ) : settingsOpen ? (
+              <SettingsPanel
+                width={contentW}
+                maxRows={overlayRows}
+                onAction={onSettingAction}
+                onChanged={onSettingChanged}
+                onClose={() => setSettingsOpen(false)}
+              />
             ) : paletteOpen ? (
               <CommandPalette
                 width={contentW}
@@ -1305,9 +1560,17 @@ export const App: React.FC<AppProps> = ({
             onCancel={() => setFilePicker(false)}
           />
         )}
-        {showPicker && <CommandPicker commands={slashCmds} selectedIdx={pickerIdx} width={contentW} />}
+        {showPicker && (
+          <CommandPicker
+            commands={slashCmds}
+            selectedIdx={pickerIdx}
+            width={contentW}
+            onHover={setPickerIdx}
+            onPick={pickCommand}
+          />
+        )}
 
-        {!infoPopup && !helpOpen && !paletteOpen && (
+        {!infoPopup && !helpOpen && !paletteOpen && !settingsOpen && (
           <Box marginTop={1} flexShrink={0}>
             {renderPrompt(contentW)}
           </Box>
@@ -1364,3 +1627,35 @@ function toolDraft(response: string): { label: string; chars: number } | null {
   const label = verb[tool] ? `${verb[tool]}${name && tool !== "run_shell" ? " " + name : ""}` : `Preparing ${tool}`
   return { label, chars: body.length }
 }
+
+/** "↓ 42 lines below   esc  back to the latest", clickable. */
+const BelowNotice: React.FC<{ lines: number; onClick: () => void }> = ({ lines, onClick }) => {
+  const [ref, hover] = useHitbox({ onClick });
+  const t = useTween(hover ? 1 : 0, 120);
+  return (
+    <Box ref={ref} paddingX={1} flexShrink={0}>
+      <Text wrap="truncate-end">
+        <Text color={mix(theme.textFaint, theme.primary, t)}>{ICON.down} </Text>
+        <Text color={mix(theme.textMuted, theme.textBright, t)}>{lines} lines below</Text>
+        <Text color={theme.textFaint}>   {hover ? "click or esc" : "esc"}  back to the latest</Text>
+      </Text>
+    </Box>
+  );
+};
+
+/** "Update available 0.8.1 → 0.9.0   /update installs it", clickable. */
+const UpdateBanner: React.FC<{ current: string; latest: string; onClick: () => void }> = ({ current, latest, onClick }) => {
+  const [ref, hover] = useHitbox({ onClick });
+  const t = useTween(hover ? 1 : 0, 120);
+  return (
+    <Box ref={ref} paddingX={1} flexShrink={0}>
+      <Text wrap="truncate-end">
+        <Text color={theme.warn}>Update available  </Text>
+        <Text color={theme.textMuted}>{current} → {latest}</Text>
+        <Text color={theme.textFaint}>   </Text>
+        <Text color={mix(theme.textBright, theme.primaryBright, t)}>/update</Text>
+        <Text color={theme.textFaint}>{hover ? "  click to install it now" : " installs it"}</Text>
+      </Text>
+    </Box>
+  );
+};

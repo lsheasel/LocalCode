@@ -214,3 +214,18 @@ export function fuzzyScore(query: string, text: string): number | null {
 export function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(n)
 }
+
+/**
+ * The answer as the user reads it: no reasoning, no tool-call JSON, no
+ * "DONE:" marker. What /copy and /export take.
+ */
+export function answerText(content: string): string {
+  let answer = parseThinking(content)
+    .response.replace(/```json[\s\S]*?```/gi, '')
+    .replace(/\s*DONE:\s*<[^>]*>/gi, '')
+    .replace(/(?:^|\n)DONE:\s*/gi, '\n')
+    .trim()
+  const toolCallIdx = answer.search(/(?:^|\n)\s*\{"tool"\s*:/)
+  if (toolCallIdx !== -1) answer = answer.slice(0, toolCallIdx).trim()
+  return answer
+}

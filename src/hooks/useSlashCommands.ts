@@ -1,8 +1,8 @@
 import { useCallback, useRef, MutableRefObject } from 'react'
 import { AgentMessage, Attachment, ToolCall, ToolResult } from '../shared/types'
-import { AgentRuntime, DiffPreview } from '../agent/AgentRuntime'
+import { AgentRuntime, DiffPreview, PLAN_ALLOWED_TOOLS } from '../agent/AgentRuntime'
 import { ConfigManager } from '../config/ConfigManager'
-import { runShell } from '../agent/tools/shell'
+import { runShell, runProgram } from '../agent/tools/shell'
 import { checkpoints, displayPath } from '../agent/checkpoints'
 import { describeTool } from '../shared/toolText'
 import { LLMRouter } from '../llm/LLMRouter'
@@ -16,12 +16,18 @@ import {
 import { globalRegistry, globalCommandRegistry } from '../plugins/registry.js'
 import { loadPlugins, reloadPlugin } from '../plugins/loader.js'
 import { COMPACT_SUMMARY_PROMPT } from '../shared/prompts'
-import { INSTRUCTIONS_TEMPLATE, projectInstructionsPath } from '../agent/projectInstructions'
-import { writeFileSync } from 'fs'
+import { INSTRUCTIONS_TEMPLATE, projectInstructionsPath, loadInstructions } from '../agent/projectInstructions'
+import { TOOL_SCHEMAS } from '../agent/toolSchemas'
+import { writeFileSync, existsSync } from 'fs'
 import { join, basename } from 'path'
+import { execFile } from 'child_process'
 import { loadAttachment, listCwdFiles } from '../shared/attachments'
-import { parseThinking } from '../shared/utils'
+import { parseThinking, answerText } from '../shared/utils'
 import { Message } from '../shared/types'
+import { getAppVersion } from '../shared/version'
+import { installInfo, latestVersion, semverGt, updateSteps } from '../shared/updateChecker'
+import { KNOWN_SERVERS, findServer, installServer, serverLabel, LSP_DIR } from '../lsp/installer'
+
 
 interface ConfirmRequest {
   toolCall: ToolCall
@@ -70,6 +76,12 @@ interface SlashCommandsOptions {
   setContextTokens: (n: number) => void
   /** Live output of the command or tool that is running right now. */
   setLiveOutput: (o: { title: string; text: string } | null) => void
+  /** Open the settings panel (/settings, /config). */
+  setSettingsOpen: (b: boolean) => void
+  /** Open the keyboard shortcuts (/keys). */
+  setHelpOpen: (b: boolean) => void
+  /** Put text on the clipboard and say so; `what` names it ("the last answer"). */
+  copyText: (text: string, what: string) => void
   s: MutableRefObject<SlashCommandsState>
   agentRef: MutableRefObject<AgentRuntime | null>
   taskQueueRef: MutableRefObject<string[]>
@@ -101,6 +113,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
     setMode, setConnectPopup, setModelPicker, setModelLoading,
     setModelList, setFilePicker, setFileList, setConfirm,
     setPluginCmds, setInfoScroll, setContextTokens, setLiveOutput,
+    setSettingsOpen, setHelpOpen, copyText,
     s, agentRef, taskQueueRef, crashCompactRef,
     tokenBufRef, tokenCntRef, tokenFlushRef, toolMsgsRef,
     streamInThinkingRef, agentStartTimeRef,
@@ -161,30 +174,286 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         return
       }
 
-      // ── /config slash command ──────────────────────────────────────────────────
-      if (input.startsWith('/config') || input.toLowerCase() === '/config') {
+      // ── /settings ─────────────────────────────────────────────────────────────
+      if (input === '/settings' || input === '/config') {
+        setSettingsOpen(true)
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /keys ─────────────────────────────────────────────────────────────────
+      if (input === '/keys') {
+        setHelpOpen(true)
+        return
+      }
+
+      // ── /new ──────────────────────────────────────────────────────────────────
+      if (input === '/new') {
+        if (isRunning) {
+          addMsg({ type: 'error', content: 'The agent is still working. Stop it with ctrl+c first.' })
+          return
+        }
+        setMessages([])
+        setConvHistory([])
+        setAttachments([])
+        setInfoScroll(0)
+        setContextTokens(0)
+        return
+      }
+
+      // ── /mode ─────────────────────────────────────────────────────────────────
+      if (input === '/mode' || input.startsWith('/mode ')) {
+        const want = input.slice(5).trim().toLowerCase()
+        if (want !== 'build' && want !== 'plan' && want !== 'debug') {
+          addMsg({ type: 'error', content: 'Usage: /mode build  |  /mode plan  |  /mode debug   (tab cycles them too)' })
+          return
+        }
+        setMode(want)
+        cm.set({ debugMode: want === 'debug' })
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /copy ─────────────────────────────────────────────────────────────────
+      if (input === '/copy') {
+        const last = [...messages].reverse().find((m) => m.type === 'done' && answerText(m.content))
+        if (!last) addMsg({ type: 'error', content: 'There is no answer to copy yet.' })
+        else copyText(answerText(last.content), 'the last answer')
+        return
+      }
+
+      // ── /retry ────────────────────────────────────────────────────────────────
+      if (input === '/retry') {
+        if (isRunning) {
+          addMsg({ type: 'error', content: 'The agent is still working. Stop it with ctrl+c first.' })
+          return
+        }
+        const last = [...messages].reverse().find((m) => m.type === 'text' && m.content.startsWith('> ') && !m.content.startsWith('> ['))
+        if (!last) {
+          addMsg({ type: 'error', content: 'There is no message to send again yet.' })
+          return
+        }
+        const prompt = last.content.slice(2).replace(/\s+\[[^\]]*\]$/, '')
+        // The answer being retried should not be part of what the agent remembers.
+        const hist = s.current.convHistory
+        let cut = hist.length
+        for (let i = hist.length - 1; i >= 0; i--) {
+          if (hist[i].role === 'user') {
+            cut = i
+            break
+          }
+        }
+        const trimmed = hist.slice(0, cut)
+        setConvHistory(trimmed)
+        s.current = { ...s.current, convHistory: trimmed }
+        setTimeout(() => handleSubmit(prompt), 30)
+        return
+      }
+
+      // ── /review ───────────────────────────────────────────────────────────────
+      if (input === '/review') {
+        setTimeout(
+          () =>
+            handleSubmit(
+              'Review the uncommitted changes in this project. Run `git diff` and `git diff --staged`, read the ' +
+                'changed files where the diff is not enough, and report bugs, risky changes and missing tests, ' +
+                'the most important first, each with file and line. Do not change any files.',
+            ),
+          10,
+        )
+        return
+      }
+
+      // ── /diff ─────────────────────────────────────────────────────────────────
+      if (input === '/diff') {
+        const git = (args: string[]) =>
+          new Promise<string | null>((resolve) =>
+            execFile('git', args, { cwd, maxBuffer: 20 * 1024 * 1024, windowsHide: true }, (err, out) =>
+              resolve(err ? null : out),
+            ),
+          )
+        const stat = await git(['diff', 'HEAD', '--stat', '--no-color'])
+        if (stat === null) {
+          addMsg({ type: 'error', content: 'This folder is not a git repository, so there is no diff to show.' })
+          return
+        }
+        const diff = (await git(['diff', 'HEAD', '--no-color'])) ?? ''
+        if (!diff.trim()) {
+          addMsg({ type: 'command', commandTitle: 'diff', content: '  No changes since the last commit.' })
+          return
+        }
+        const lines = diff.replace(/\n$/, '').split('\n')
+        showInfo('diff', [
+          ...stat.replace(/\n$/, '').split('\n').map((l) => '  ' + l.trim()),
+          '',
+          ...lines.slice(0, 3000),
+          ...(lines.length > 3000 ? [`  … ${lines.length - 3000} more lines`] : []),
+        ])
+        return
+      }
+
+      // ── /export ───────────────────────────────────────────────────────────────
+      if (input === '/export' || input.startsWith('/export ')) {
+        if (messages.length === 0) {
+          addMsg({ type: 'error', content: 'Nothing to export yet.' })
+          return
+        }
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-')
+        let name = input.slice(7).trim() || `localcode-${stamp}.md`
+        if (!/\.md$/i.test(name)) name += '.md'
+        const file = join(cwd, name)
+        try {
+          writeFileSync(file, transcriptMarkdown(messages), 'utf8')
+          addMsg({ type: 'command', commandTitle: `exported ${name}`, content: `  ${file}` })
+        } catch (err) {
+          addMsg({ type: 'error', content: `Could not write ${name}: ${(err as Error).message}` })
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /rules ────────────────────────────────────────────────────────────────
+      if (input === '/rules') {
+        const { text, sources } = loadInstructions(cwd)
+        showInfo(
+          'rules',
+          sources.length
+            ? [`**Sent with every task: ${sources.join(', ')}**`, '', ...text.split('\n')]
+            : [
+                '  No project instructions yet.',
+                '',
+                '  /init                    Create LOCALCODE.md in this folder',
+                '  ~/.localcode/LOCALCODE.md  Instructions for every project',
+              ],
+        )
+        return
+      }
+
+      // ── /tools ────────────────────────────────────────────────────────────────
+      if (input === '/tools') {
+        const plugins = globalRegistry.listTools().filter((t) => t.pluginName !== undefined)
+        showInfo('tools', [
+          `**What the agent can use${mode === 'plan' ? ' (plan mode: reading only)' : ''}**`,
+          '',
+          ...TOOL_SCHEMAS.map((t) => {
+            const off = mode === 'plan' && !PLAN_ALLOWED_TOOLS.has(t.name)
+            return `  ${t.name.padEnd(18)} : ${off ? '(not in plan mode) ' : ''}${t.description.split('. ')[0].replace(/\.$/, '')}`
+          }),
+          ...(plugins.length
+            ? ['', '**From plugins**', '', ...plugins.map((t) => `  ${t.name.padEnd(18)} : ${t.description}`)]
+            : []),
+        ])
+        return
+      }
+
+      // ── /version ──────────────────────────────────────────────────────────────
+      if (input === '/version') {
+        const current = getAppVersion()
+        const info = installInfo()
+        showInfo('version', [`  version     : ${current}`, `  installed   : ${info.method === 'git' ? `from source (${info.dir})` : 'with npm'}`, '  newest      : checking…'])
+        const latest = await latestVersion()
+        showInfo('version', [
+          `  version     : ${current}`,
+          `  installed   : ${info.method === 'git' ? `from source (${info.dir})` : 'with npm'}`,
+          `  newest      : ${latest ?? 'GitHub could not be reached'}`,
+          '',
+          latest && semverGt(latest, current)
+            ? '  /update                  Install it'
+            : '  You have the newest version.',
+        ])
+        return
+      }
+
+      // ── /update ───────────────────────────────────────────────────────────────
+      if (input === '/update') {
+        if (isRunning) {
+          addMsg({ type: 'error', content: 'The agent is still working. Stop it with ctrl+c first.' })
+          return
+        }
+        const current = getAppVersion()
+        setAgentStatus('running')
+        pushLive('update', 'Looking for the newest release…\n')
+        const latest = await latestVersion()
+        if (!latest) {
+          endLive()
+          setAgentStatus('idle')
+          addMsg({ type: 'error', content: 'GitHub could not be reached, so LocalCode cannot look for a new version right now.' })
+          return
+        }
+        if (!semverGt(latest, current)) {
+          endLive()
+          setAgentStatus('idle')
+          addMsg({ type: 'command', commandTitle: 'update', content: `  You have the newest version (${current}).` })
+          return
+        }
+        let failed = ''
+        for (const step of updateSteps()) {
+          pushLive(`update to ${latest}`, `\n$ ${step.cmd} ${step.args.join(' ')}\n`)
+          const r = await runProgram(step.cmd, step.args, step.cwd ?? cwd, (chunk) => pushLive(`update to ${latest}`, chunk))
+          if (!r.ok) {
+            failed = `${step.cmd} ${step.args.join(' ')}\n${r.output.trim().split('\n').slice(-8).join('\n')}`
+            break
+          }
+        }
+        endLive()
+        setAgentStatus('idle')
+        if (failed) {
+          addMsg({ type: 'error', content: `The update to ${latest} failed:\n${failed}` })
+        } else {
+          addMsg({
+            type: 'command',
+            commandTitle: `update ${current} → ${latest}`,
+            content: `  Installed ${latest}. Restart LocalCode to use it: /exit, then localcode`,
+          })
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /lsp servers, /lsp install ────────────────────────────────────────────
+      if (input === '/lsp servers') {
+        const rows = await Promise.all(
+          KNOWN_SERVERS.map(async (name) => {
+            const found = await findServer(name)
+            return `  ${serverLabel(name).padEnd(28)} : ${found ? `installed  ${found.command}` : `missing, /lsp install ${name}`}`
+          }),
+        )
+        showInfo('language servers', [
+          '**Language servers for hover and go-to-definition**',
+          '',
+          ...rows,
+          '',
+          `  Installed by LocalCode into ${LSP_DIR} (npm) or with pip, go, rustup.`,
+          `  Missing ones are installed on first use: ${cm.get().lsp?.autoInstall === false ? 'off' : 'on'} (/settings).`,
+        ])
+        return
+      }
+      if (input === '/lsp install' || input.startsWith('/lsp install ')) {
+        const name = input.slice(12).trim()
+        if (!KNOWN_SERVERS.includes(name)) {
+          addMsg({ type: 'error', content: `Usage: /lsp install <${KNOWN_SERVERS.join(' | ')}>` })
+          return
+        }
+        setAgentStatus('running')
+        const found = await installServer(name)
+        setAgentStatus('idle')
+        if (found) addMsg({ type: 'command', commandTitle: `installed ${serverLabel(name)}`, content: `  ${found.command}` })
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /config with arguments ────────────────────────────────────────────────
+      if (input.startsWith('/config ')) {
         const rest = input.slice(7).trim()
         const [sub, ...rest2] = rest.split(/\s+/)
         const val = rest2.join(' ').trim()
 
-        if (!sub) {
-          const cfg = cm.get()
-          showInfo('config', [
-            `  config path : ${cm.getConfigPath()}`,
-            '',
-            `  provider    : ${cfg.llm.provider}`,
-            `  model       : ${cfg.llm.model}`,
-            `  url         : ${cfg.llm.baseURL || '(default)'}`,
-            `  temperature : ${cfg.llm.temperature ?? 0.1}`,
-            '',
-            '**Commands**',
-            '  /config provider ollama      Use Ollama  (localhost:11434)',
-            '  /config provider lmstudio    Use LM Studio  (localhost:1234)',
-            '  /config model <name>         Switch model',
-            '  /config url <url>            Override base URL',
-            '  /config temperature <val>    Set temperature  (0.0–1.0)',
-          ])
-        } else {
+        {
           switch (sub.toLowerCase()) {
             case 'model':
               if (!val) {
@@ -323,7 +592,9 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
       if (
         (input === '/lsp' || input.startsWith('/lsp ')) &&
         !input.startsWith('/lsp hover') &&
-        !input.startsWith('/lsp def')
+        !input.startsWith('/lsp def') &&
+        !input.startsWith('/lsp servers') &&
+        !input.startsWith('/lsp install')
       ) {
         const targetArg = input.slice(4).trim() || '.'
         setAgentStatus('thinking')
@@ -872,6 +1143,10 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         case 'help':
         case '/help':
           showInfo('help', [
+            '**Start here**',
+            '  /settings                      All settings in one place',
+            '  /keys                          Keyboard shortcuts',
+            '',
             '**Attachments**',
             '  /attach                        Attach file or image (@-picker)',
             '  @path/to/file                  Include file in message',
@@ -882,12 +1157,22 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /session load <name>           Load conversation',
             '  /session delete <name>         Delete session',
             '  /continue                      Pick up the last session in this folder',
+            '  /new                           Start a new conversation',
+            '  /retry                         Send your last message again',
+            '  /copy                          Copy the last answer',
+            '  /export [file]                 Save the conversation as Markdown',
             '  /init                          Create LOCALCODE.md (project instructions)',
+            '  /rules                         Show the project instructions',
             '  /compact                       Summarize & compress conversation',
             '',
             '**Changes**',
             '  /undo                          Revert the last file change',
             '  /undo all                      Revert every change of the last task',
+            '  /diff                          What changed since the last commit',
+            '  /review                        Let the agent review those changes',
+            '',
+            '**Modes**',
+            '  /mode build|plan|debug         Switch mode (tab cycles them)',
             '',
             '**Connection**',
             '  /connect                       Connect to server (popup)',
@@ -895,7 +1180,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /model reset                   Plan/debug mode: back to the default model',
             '',
             '**Configuration**',
-            '  /config                        Show current configuration',
+            '  /settings  /config             Settings panel',
             '  /config provider ollama        Use Ollama  (localhost:11434)',
             '  /config provider lmstudio      Use LM Studio  (localhost:1234)',
             '  /config model <name>           Switch model',
@@ -906,8 +1191,13 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /lsp                           Run diagnostics (tsc/cargo/go vet/eslint)',
             '  /lsp hover <file>:<line>:<col>  Hover info via LSP server',
             '  /lsp def <file>:<line>:<col>    Go-to-definition via LSP server',
+            '  /lsp servers                   Which language servers are installed',
+            '  /lsp install <name>            Install one (typescript, pylsp, gopls, rust-analyzer)',
+            '  /tools                         What the agent can use',
             '  /models                        List available models',
             '  /doctor                        Check connection & status',
+            '  /version                       Version and the newest release',
+            '  /update                        Install the newest LocalCode',
             '  /clear                         Clear screen',
             '  /exit                          Quit',
             '',
@@ -920,7 +1210,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  ↑ ↓                            Lines in the prompt, then input history',
             '  tab                            Autocomplete / cycle build → plan → debug',
             '  wheel  /  PgUp PgDn            Scroll the conversation',
-            '  shift+drag                     Select text to copy',
+            '  drag                           Select text, it is copied when you let go',
+            '  click                          Open a step, copy an answer, edit a message',
             '',
             '**Shell**',
             '  $ <cmd>   or   ! <cmd>         e.g.: $ npm test',
@@ -1330,4 +1621,25 @@ export function conversationFrom(messages: AgentMessage[]): Message[] {
     }
   }
   return out.slice(-60)
+}
+
+/** The conversation as Markdown, for /export. */
+export function transcriptMarkdown(messages: AgentMessage[]): string {
+  const out: string[] = [`# LocalCode session`, '', `_${new Date().toLocaleString()}_`, '']
+  for (const m of messages) {
+    if (m.type === 'text' && m.content.startsWith('> ')) {
+      out.push('## You', '', m.content.slice(2), '')
+    } else if (m.type === 'done') {
+      const answer = answerText(m.content)
+      if (answer) out.push('## LocalCode', '', answer, '')
+    } else if (m.type === 'tool_call' && m.toolCall) {
+      const [verb, target] = describeTool(m.toolCall.tool, m.toolCall.arguments)
+      out.push(`- ${verb} \`${target}\``)
+    } else if (m.type === 'tool_result' && m.toolResult?.meta?.diffPath && !m.toolCall) {
+      out.push(`- changed \`${m.toolResult.meta.diffPath}\``)
+    } else if (m.type === 'error') {
+      out.push('', `> Error: ${m.content.split('\n')[0]}`, '')
+    }
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n'
 }

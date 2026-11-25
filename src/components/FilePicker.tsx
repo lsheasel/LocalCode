@@ -3,6 +3,7 @@ import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import { extname } from 'path'
 import { Fieldset } from './Fieldset'
+import { ListRow } from './ListRow'
 import { theme, ICON } from '../shared/theme'
 import { truncStart } from '../shared/utils'
 
@@ -71,11 +72,10 @@ export const FilePicker: React.FC<Props> = ({ width: widthProp, files, onSelect,
           const isSel = top + i === sel
           const isImage = IMAGE_EXTS.has(extname(f).toLowerCase())
           return (
-            <Text key={f} wrap="truncate-end">
-              <Text color={isSel ? theme.primary : theme.textGhost}>{isSel ? ICON.selected : ICON.unselected}</Text>
+            <ListRow key={f} selected={isSel} onHover={() => setSelectedIdx(top + i)} onClick={() => onSelect(f)}>
               <Text color={theme.textFaint}>{isImage ? 'image ' : 'file  '}</Text>
               <Text color={isSel ? theme.textBright : theme.textMuted} bold={isSel}>{truncStart(f, width - 14)}</Text>
-            </Text>
+            </ListRow>
           )
         })
       )}

@@ -3,6 +3,8 @@ import { existsSync } from 'fs'
 import { resolve, extname } from 'path'
 import { pathToFileURL, fileURLToPath } from 'url'
 import { LspClient } from './LspClient.js'
+import { findServer, installServer, serverLabel } from './installer'
+import { ConfigManager } from '../config/ConfigManager'
 
 interface ServerDef {
   name: string
@@ -40,22 +42,42 @@ export class LspManager {
   private async getOrStart(absFilePath: string, workDir: string): Promise<{ client: LspClient; def: ServerDef } | null> {
     const ext = extname(absFilePath).toLowerCase()
     const def = defForExt(ext)
-    if (!def) return null
+    if (!def) {
+      this.lastProblem = `LocalCode has no language server for ${ext || 'these'} files.`
+      return null
+    }
+    this.lastProblem = ''
 
     const k = this.key(def.name, workDir)
     const existing = this.clients.get(k)
     if (existing?.isRunning) return { client: existing, def }
     if (existing) this.clients.delete(k)
 
-    const client = new LspClient(def.command, def.args, workDir, def.name)
+    // The installed server, or one installed now (settings: agent →
+    // install language servers).
+    let found = await findServer(def.name, workDir)
+    if (!found && ConfigManager.getInstance().get().lsp?.autoInstall !== false) {
+      found = await installServer(def.name, workDir)
+    }
+    if (!found) {
+      this.lastProblem = `No ${serverLabel(def.name)} for ${ext} files. /lsp install ${def.name} installs it.`
+      return null
+    }
+
+    const client = new LspClient(found.command, [...found.args, ...def.args], workDir, def.name, found.initOptions)
     try {
       await client.start()
       this.clients.set(k, client)
+      this.lastProblem = ''
       return { client, def }
-    } catch {
+    } catch (e) {
+      this.lastProblem = `${serverLabel(def.name)} did not start: ${(e as Error).message}`
       return null
     }
   }
+
+  /** Why the last hover / definition had no server, for the error message. */
+  lastProblem = ''
 
   async hover(
     filePath: string,

@@ -21,6 +21,9 @@ export class DiscordPresence {
 
   async connect(): Promise<void> {
     if (DISCORD_CLIENT_ID === '__DISCORD_CLIENT_ID__') return  // not configured
+    if (this.rpc) return  // already connected (or connecting)
+    this.lastStatus = ''
+    this.lastDetail = ''
 
     try {
       // Dynamic import so missing module doesn't crash on startup

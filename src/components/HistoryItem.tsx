@@ -1,11 +1,13 @@
-import React from 'react'
-import { Box, Text } from 'ink'
+import React, { RefObject } from 'react'
+import { Box, Text, DOMElement } from 'ink'
 import { AgentMessage } from '../shared/types'
-import { parseThinking, countLines, fmtTime } from '../shared/utils'
+import { parseThinking, countLines, fmtTime, answerText } from '../shared/utils'
 import { describeTool, summarizeOutput, nicePath } from '../shared/toolText'
 import { DiffView } from './DiffView'
 import { MarkdownText } from './MarkdownText'
 import { theme, modeColors, Mode, ICON, THREAD_BORDER } from '../shared/theme'
+import { useHitbox } from '../shared/mouse'
+import { mix, useGlow, useTween } from '../shared/anim'
 
 // ── The transcript thread ────────────────────────────────────────────────────
 //
@@ -138,51 +140,87 @@ const Thread: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   </Box>
 )
 
+/** What a row does when clicked, said on the right while the mouse is over it. */
+export type RowAction = 'open' | 'copy' | 'reuse'
+const ACTION_LABEL: Record<RowAction, string> = {
+  open: `open output ${ICON.enter}`,
+  copy: `copy answer ${ICON.enter}`,
+  reuse: `edit again ${ICON.enter}`,
+}
+
+/** How a row looks right now: under the mouse (0 to 1) and freshly added (1 to 0). */
+interface Lit {
+  hover: number
+  glow: number
+  action?: RowAction
+  headRef?: RefObject<DOMElement>
+}
+
 /** "◆ you ……………… 14:02" — opens a message. */
-const Knot: React.FC<{ glyph: string; color: string; label: string; right?: string }> = ({
+const Knot: React.FC<{ glyph: string; color: string; label: string; right?: string; lit?: Lit }> = ({
   glyph,
   color,
   label,
   right,
-}) => (
-  <Box>
-    <Box flexShrink={0}>
-      <Text color={color}>{glyph} </Text>
-      <Text color={theme.textMuted}>{label}</Text>
-    </Box>
-    <Box flexGrow={1} />
-    {right ? (
+  lit,
+}) => {
+  const hover = lit?.hover ?? 0
+  const glow = lit?.glow ?? 0
+  const showAction = lit?.action && hover > 0.5
+  return (
+    <Box ref={lit?.headRef}>
       <Box flexShrink={0}>
-        <Text color={theme.textFaint}>{right}</Text>
+        <Text color={mix(color, theme.primaryPale, Math.max(glow * 0.8, hover * 0.5))}>{glyph} </Text>
+        <Text color={mix(theme.textMuted, theme.textBright, Math.max(glow, hover))}>{label}</Text>
       </Box>
-    ) : null}
-  </Box>
-)
+      <Box flexGrow={1} />
+      {showAction ? (
+        <Box flexShrink={0}>
+          <Text color={mix(theme.textFaint, theme.primary, hover)}>{ACTION_LABEL[lit!.action!]}</Text>
+        </Box>
+      ) : right ? (
+        <Box flexShrink={0}>
+          <Text color={theme.textFaint}>{right}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
 
 const VERB_W = 8
 
 /** "├─ read     math.js ……… 6 lines" — one tool step, result on the right. */
-const Branch: React.FC<{ verb: string; target: string; summary?: string; summaryColor?: string }> = ({
-  verb,
-  target,
-  summary,
-  summaryColor = theme.textFaint,
-}) => (
-  <Box>
-    <Box flexShrink={0}>
-      <Text color={theme.thread}>{ICON.tool} </Text>
-      <Text color={theme.text}>{verb.padEnd(VERB_W)}</Text>
-    </Box>
-    <Box flexGrow={1} minWidth={0}>
-      <Text color={theme.textDim} wrap="truncate-end">{target}</Text>
-    </Box>
-    {summary ? (
-      <Box flexShrink={0} marginLeft={2}>
-        <Text color={summaryColor}>{summary}</Text>
+const Branch: React.FC<{
+  verb: string
+  target: string
+  summary?: React.ReactNode
+  summaryColor?: string
+  lit?: Lit
+}> = ({ verb, target, summary, summaryColor = theme.textFaint, lit }) => {
+  const hover = lit?.hover ?? 0
+  const glow = lit?.glow ?? 0
+  const showAction = lit?.action && hover > 0.5
+  return (
+    <Box ref={lit?.headRef}>
+      <Box flexShrink={0}>
+        <Text color={mix(theme.thread, theme.primary, Math.max(glow, hover))}>{ICON.tool} </Text>
+        <Text color={mix(theme.text, theme.textBright, Math.max(glow, hover))}>{verb.padEnd(VERB_W)}</Text>
       </Box>
-    ) : null}
-  </Box>
-)
+      <Box flexGrow={1} minWidth={0}>
+        <Text color={mix(theme.textDim, theme.text, hover)} wrap="truncate-end">{target}</Text>
+      </Box>
+      {showAction ? (
+        <Box flexShrink={0} marginLeft={2}>
+          <Text color={mix(theme.textFaint, theme.primary, hover)}>{ACTION_LABEL[lit!.action!]}</Text>
+        </Box>
+      ) : summary ? (
+        <Box flexShrink={0} marginLeft={2}>
+          {typeof summary === 'string' ? <Text color={summaryColor}>{summary}</Text> : summary}
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
 
 const firstLine = (s: string) => s.split('\n')[0]
 
@@ -204,34 +242,57 @@ const DiffCount: React.FC<{ added: number; removed: number }> = ({ added, remove
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
 
+/** What clicking an entry's first row does, if anything. */
+export function rowAction(item: TranscriptItem): RowAction | undefined {
+  const { msg } = item
+  if (isUserMessage(msg)) return msg.content.startsWith('> [') ? undefined : 'reuse'
+  if (msg.type === 'tool_call' || msg.type === 'tool_result' || msg.type === 'command') return 'open'
+  if (msg.type === 'done' && answerText(msg.content)) return 'copy'
+  return undefined
+}
+
+/** Entries added this recently glow when they appear. */
+const FRESH_MS = 1500
+
 export const HistoryItem: React.FC<{
   item: TranscriptItem
   model: string
   mode: Mode
   debugMode: boolean
   width: number
-}> = ({ item, mode, debugMode, width }) => {
+  /** The first row of an entry was clicked. */
+  onAction?: (action: RowAction, item: TranscriptItem) => void
+}> = ({ item, mode, debugMode, width, onAction }) => {
   const gap = gapBefore(item.msg, item.prevShown)
+  const action = onAction ? rowAction(item) : undefined
+  const [headRef, hovered] = useHitbox({
+    onClick: action ? () => onAction!(action, item) : undefined,
+    disabled: !action,
+  })
+  const hover = useTween(hovered ? 1 : 0, 140)
+  const glow = useGlow(Date.now() - item.msg.timestamp < FRESH_MS, 1100)
+  const lit: Lit = { hover, glow, action, headRef }
   return (
     <Box width={width} flexDirection="column" flexShrink={0}>
       {gap > 0 && <Text color={theme.thread}>│</Text>}
-      <Entry item={item} mode={mode} debugMode={debugMode} width={width} />
+      <Entry item={item} mode={mode} debugMode={debugMode} width={width} lit={lit} />
     </Box>
   )
 }
 
-const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; width: number }> = ({
+const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; width: number; lit: Lit }> = ({
   item,
   mode,
   debugMode,
   width,
+  lit,
 }) => {
   const { msg, next } = item
 
   if (isUserMessage(msg)) {
     return (
       <Box flexDirection="column">
-        <Knot glyph={ICON.you} color={modeColors[mode].accent} label="you" right={fmtTime(msg.timestamp)} />
+        <Knot glyph={ICON.you} color={modeColors[mode].accent} label="you" right={fmtTime(msg.timestamp)} lit={lit} />
         <Thread>
           <Text color={theme.textBright}>{msg.content.slice(2)}</Text>
         </Thread>
@@ -244,14 +305,12 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
     const m = msg.toolResult!.meta!
     return (
       <Box flexDirection="column">
-        <Box>
-          <Box flexGrow={1} minWidth={0}>
-            <Branch verb={m.diffIsNew ? 'create' : 'edit'} target={nicePath(m.diffPath)} />
-          </Box>
-          <Box flexShrink={0} marginLeft={2}>
-            <DiffCount added={m.diffNew?.length ?? 0} removed={m.diffOld?.length ?? 0} />
-          </Box>
-        </Box>
+        <Branch
+          verb={m.diffIsNew ? 'create' : 'edit'}
+          target={nicePath(m.diffPath)}
+          summary={<DiffCount added={m.diffNew?.length ?? 0} removed={m.diffOld?.length ?? 0} />}
+          lit={lit}
+        />
         <Thread>
           <DiffView
             filePath={m.diffPath!}
@@ -281,6 +340,7 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
             target={target}
             summary={!result ? undefined : failed ? `${ICON.fail} failed` : summarizeOutput(result.output || '')}
             summaryColor={failed ? theme.error : theme.textFaint}
+            lit={lit}
           />
           {failed && (
             <Thread>
@@ -311,6 +371,7 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
             target={target}
             summary={ok ? summarizeOutput(msg.toolResult?.output || '') : `${ICON.fail} failed`}
             summaryColor={ok ? theme.textFaint : theme.error}
+            lit={lit}
           />
           {!ok && (
             <Thread>
@@ -333,14 +394,8 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
       )
 
     case 'done': {
-      const { thinking, response } = parseThinking(msg.content)
-      let answer = response
-        .replace(/```json[\s\S]*?```/gi, '')
-        .replace(/\s*DONE:\s*<[^>]*>/gi, '')
-        .replace(/(?:^|\n)DONE:\s*/gi, '\n')
-        .trim()
-      const toolCallIdx = answer.search(/(?:^|\n)\s*\{"tool"\s*:/)
-      if (toolCallIdx !== -1) answer = answer.slice(0, toolCallIdx).trim()
+      const { thinking } = parseThinking(msg.content)
+      const answer = answerText(msg.content)
       const meta: string[] = []
       if (msg.durationMs) meta.push(`${(msg.durationMs / 1000).toFixed(1)}s`)
       // Generation speed — the number that matters most on local hardware.
@@ -351,7 +406,7 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
       }
       return (
         <Box flexDirection="column">
-          <Knot glyph={ICON.agent} color={theme.textBright} label="localcode" right={meta.join('   ')} />
+          <Knot glyph={ICON.agent} color={theme.textBright} label="localcode" right={meta.join('   ')} lit={lit} />
           <Thread>
             {thinking.trim() ? (
               <Text color={theme.textFaint} italic wrap="truncate-end">
@@ -372,7 +427,7 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
         msg.content.toLowerCase().includes('not reachable')
       return (
         <Box flexDirection="column">
-          <Knot glyph={ICON.fail} color={theme.error} label="error" />
+          <Knot glyph={ICON.fail} color={theme.error} label="error" lit={lit} />
           <Thread>
             <Text color={theme.errorBright}>{msg.content}</Text>
             {isConnErr && (
@@ -385,10 +440,15 @@ const Entry: React.FC<{ item: TranscriptItem; mode: Mode; debugMode: boolean; wi
 
     case 'command': {
       // Slash-command output is written with a two-space indent; drop it.
-      const lines = msg.content.replace(/\n+$/, '').split('\n').map((l) => l.replace(/^ {2}/, '').replace(/\*\*/g, ''))
+      // Shell output ($ …) is shown as it came: its indentation is real.
+      const shell = (msg.commandTitle || '').startsWith('$')
+      const lines = msg.content
+        .replace(/\n+$/, '')
+        .split('\n')
+        .map((l) => (shell ? l : l.replace(/^ {2}/, '').replace(/\*\*/g, '')))
       return (
         <Box flexDirection="column">
-          <Branch {...commandLabel(msg.commandTitle || 'output')} />
+          <Branch {...commandLabel(msg.commandTitle || 'output')} lit={lit} />
           <Thread>
             {lines.map((line, i) => (
               <Text key={i} color={theme.textMuted} wrap="truncate-end">{'   '}{line || ' '}</Text>

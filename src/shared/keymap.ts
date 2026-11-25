@@ -84,7 +84,8 @@ export const HELP_GROUPS: HintGroup[] = [
       { keys: 'wheel', label: 'scroll the conversation' },
       { keys: 'PgUp / PgDn', label: 'scroll a page' },
       { keys: 'esc', label: 'back to the latest message' },
-      { keys: 'shift+drag', label: 'select text to copy' },
+      { keys: 'drag', label: 'select text, copied when you let go' },
+      { keys: 'click', label: 'open a step, copy an answer, edit a message' },
       { keys: 'ctrl+o', label: 'show the full reasoning of the last answer' },
       { keys: 'ctrl+b', label: 'show the full tool output of the last task' },
     ],
@@ -101,6 +102,8 @@ export const HELP_GROUPS: HintGroup[] = [
     title: 'Session',
     hints: [
       { keys: '?', label: 'toggle this help' },
+      { keys: '/settings', label: 'all settings in one place' },
+      { keys: '/copy', label: 'copy the last answer' },
       { keys: '/undo', label: 'revert the last file change (/undo all: the task)' },
       { keys: 'ctrl+l', label: 'clear the screen and the transcript' },
       { keys: 'ctrl+c', label: 'abort the agent, or quit when idle' },

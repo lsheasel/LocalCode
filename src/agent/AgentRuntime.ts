@@ -39,7 +39,7 @@ const READ_ONLY_TOOLS = new Set([
 // Plan mode investigates the codebase before planning, but must not change it.
 // Subset of READ_ONLY_TOOLS (no run_tests) so plan mode never triggers a
 // confirmation dialog. Keep in sync with TOOLS_READONLY in shared/prompts.ts.
-const PLAN_ALLOWED_TOOLS = new Set([
+export const PLAN_ALLOWED_TOOLS = new Set([
   'read_file', 'list_files', 'find_files', 'search_files',
   'git_status', 'git_diff', 'git_log',
   'lsp_check', 'lsp_hover', 'lsp_definition',

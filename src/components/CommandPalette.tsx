@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import { Fieldset } from './Fieldset'
+import { ListRow } from './ListRow'
 import { fuzzyScore, truncEnd } from '../shared/utils'
 import { theme, ICON } from '../shared/theme'
 
@@ -136,14 +137,18 @@ export const CommandPalette: React.FC<Props> = ({
         shown.map((item, i) => {
           const isSel = top + i === sel
           return (
-            <Text key={`${item.kind}:${item.label}`} wrap="truncate-end">
-              <Text color={isSel ? theme.primary : theme.textGhost}>{isSel ? ICON.selected : ICON.unselected}</Text>
+            <ListRow
+              key={`${item.kind}:${item.label}`}
+              selected={isSel}
+              onHover={() => setSelected(top + i)}
+              onClick={() => onPick(item)}
+            >
               <Text color={theme.textFaint}>{KIND_LABEL[item.kind].padEnd(8)}</Text>
               <Text color={isSel ? theme.textBright : theme.textMuted} bold={isSel}>
                 {truncEnd(item.label, labelW).padEnd(labelW)}
               </Text>
               <Text color={isSel ? theme.textMuted : theme.textFaint}>  {item.detail ?? ''}</Text>
-            </Text>
+            </ListRow>
           )
         })
       )}

@@ -26,33 +26,58 @@ export interface UpdateInfo {
   updateCommand: string
 }
 
+/** One command /update runs, in `cwd`. */
+export interface UpdateStep {
+  cmd: string
+  args: string[]
+  cwd?: string
+}
+
 // ── Install-method detection ─────────────────────────────────────────────────
 
-function detectInstallMethod(): 'npm' | 'git' {
-  const script = process.argv[1] ?? ''
+/** How this copy was installed, and for a git clone, where the clone is. */
+export function installInfo(): { method: 'npm' | 'git'; dir?: string } {
+  const script = fs.existsSync(process.argv[1] ?? '') ? fs.realpathSync(process.argv[1]) : process.argv[1] ?? ''
 
   // npm global installs always have "node_modules" somewhere in the path
-  if (script.includes('node_modules')) return 'npm'
+  if (script.includes('node_modules')) return { method: 'npm' }
 
   // If running from a directory that has a .git folder nearby → git clone
   let dir = path.dirname(script)
   for (let i = 0; i < 5; i++) {
-    if (fs.existsSync(path.join(dir, '.git'))) return 'git'
+    if (fs.existsSync(path.join(dir, '.git'))) return { method: 'git', dir }
     const parent = path.dirname(dir)
     if (parent === dir) break
     dir = parent
   }
 
   // Fallback: assume npm
-  return 'npm'
+  return { method: 'npm' }
 }
 
-function updateCommandFor(method: 'npm' | 'git', repoDir?: string): string {
+function detectInstallMethod(): 'npm' | 'git' {
+  return installInfo().method
+}
+
+function updateCommandFor(method: 'npm' | 'git'): string {
   if (method === 'git') {
-    const dir = repoDir ?? '~/LocalCode'
+    const dir = installInfo().dir ?? '~/LocalCode'
     return `cd ${dir} && git pull && npm install && npm run build`
   }
   return `npm install -g ${INSTALL_URL}`
+}
+
+/** What /update runs, step by step (no shell syntax, so it works in any shell). */
+export function updateSteps(): UpdateStep[] {
+  const { method, dir } = installInfo()
+  if (method === 'git' && dir) {
+    return [
+      { cmd: 'git', args: ['pull', '--ff-only'], cwd: dir },
+      { cmd: 'npm', args: ['install', '--no-audit', '--no-fund'], cwd: dir },
+      { cmd: 'npm', args: ['run', 'build'], cwd: dir },
+    ]
+  }
+  return [{ cmd: 'npm', args: ['install', '-g', '--no-audit', '--no-fund', INSTALL_URL] }]
 }
 
 // ── Semver helper ────────────────────────────────────────────────────────────
@@ -126,11 +151,11 @@ async function fetchGitHubLatest(): Promise<string | null> {
  * Uses a 6-hour file cache to avoid hammering the registry on every launch.
  * Returns an UpdateInfo if an update is available, otherwise null.
  */
-export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo | null> {
+export async function checkForUpdate(currentVersion: string, opts: { force?: boolean } = {}): Promise<UpdateInfo | null> {
   const installMethod = detectInstallMethod()
 
   // Return cached result if still fresh (and made for the same kind of install)
-  const cache = readCache()
+  const cache = opts.force ? null : readCache()
   if (cache && cache.installMethod === installMethod && Date.now() - cache.checkedAt < CHECK_INTERVAL) {
     if (cache.latestVersion && semverGt(cache.latestVersion, currentVersion)) {
       return {
@@ -157,4 +182,9 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
     }
   }
   return null
+}
+
+/** The newest released version, or null when neither GitHub nor npm answers. */
+export async function latestVersion(): Promise<string | null> {
+  return (await fetchGitHubLatest()) ?? (await fetchNpmLatest())
 }

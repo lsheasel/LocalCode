@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" width="96" alt="LocalCode logo" />
+  <img src="docs/media/logo.svg" width="96" alt="LocalCode logo" />
 </p>
 
 <h1 align="center">LocalCode</h1>
@@ -40,7 +40,7 @@ cd your-project
 localcode
 ```
 
-That link always installs the newest release. To update later, run the same command again (LocalCode also tells you when a new version is out).
+That link always installs the newest release. To update later, type `/update` inside LocalCode (it also tells you when a new version is out).
 
 Out of the box it talks to Ollama on its default port. Using LM Studio or a different model? Run `/connect` or `/model` once and it remembers. Then type what you want done.
 
@@ -118,6 +118,22 @@ Drop a `LOCALCODE.md` into your repo (or run `/init`) and it goes along with eve
   <img src="docs/media/palette.png" width="760" alt="The ctrl+p palette listing commands next to the session sidebar" />
 </p>
 
+### The mouse just works
+
+Point at a step to light it up, click it to see its full output, click an answer to copy it. Drag over any text and it is on your clipboard when you let go.
+
+<p align="center">
+  <img src="docs/media/mouse.png" width="760" alt="Text selected with the mouse in the conversation, the footer saying copied 3 lines" />
+</p>
+
+### Every setting in one place
+
+`/settings` lists everything you can change, with switches you flip right there: server, model, tool calls, animations, mouse, Discord status and more. Missing language servers install themselves, and `/update` brings in the newest version without leaving the app.
+
+<p align="center">
+  <img src="docs/media/settings.png" width="760" alt="The settings panel with grouped settings and on/off switches" />
+</p>
+
 ---
 
 ## Pick a model
@@ -143,7 +159,7 @@ Each mode can use its own model: plan with a big one, build with a fast one. Swi
 
 **LM Studio**: download from [lmstudio.ai](https://lmstudio.ai), load a model and click **Start Local Server** (port 1234).
 
-LocalCode starts with Ollama on `localhost:11434`. `/connect` opens a popup to pick the provider and address, and `/model` picks the model; or use `/config provider ollama|lmstudio` and `/config url <url>`. Settings live in `~/.localcode/config.json`.
+LocalCode starts with Ollama on `localhost:11434`. `/settings` (or `/connect`) switches the server and its address, and `/model` picks the model. Settings live in `~/.localcode/config.json`.
 
 </details>
 
@@ -159,7 +175,8 @@ LocalCode starts with Ollama on `localhost:11434`. `/connect` opens a popup to p
 | `Ctrl+P` | Palette: search commands, models, saved sessions and files in one list |
 | `Ctrl+W` / `Ctrl+U` | Delete the word before the cursor / everything to the line start |
 | Mouse wheel / `PgUp` `PgDn` | Scroll the conversation (`Esc` jumps back to the latest) |
-| `Shift`+drag | Select text to copy |
+| Drag | Select text; it is copied when you let go |
+| Click | On a step: open its output. On an answer: copy it. On your message: edit it again |
 | `Ctrl+O` | Show the full reasoning of the last answer |
 | `Ctrl+B` | Show the full tool output of the last task |
 | `?` | Show all shortcuts (with an empty input) |
@@ -182,25 +199,40 @@ Type `/` to open the searchable command picker.
 | Command | What it does |
 |---|---|
 | `/help` | Show help |
+| `/settings` | Every setting in one place: server, model, tools, animations, mouse, Discord and more |
 | `/model` | Pick a model (searchable popup) |
 | `/model reset` | In plan / debug mode: go back to the default model |
 | `/models` | List all available models |
 | `/connect` | Open the server connection popup |
 | `/init` | Create a `LOCALCODE.md` with project instructions |
 | `/continue` | Pick up the last session in this folder (also: `localcode --continue`) |
+| `/new` | Start a new conversation |
+| `/retry` | Send your last message again |
+| `/copy` | Copy the last answer to the clipboard |
+| `/export [file]` | Save the conversation as a Markdown file |
 | `/undo` | Revert the agent's last file change |
 | `/undo all` | Revert every file change of the last task |
+| `/diff` | Show what changed since the last commit |
+| `/review` | Let the agent review your uncommitted changes |
+| `/mode build\|plan\|debug` | Switch mode (`tab` cycles them too) |
 | `/compact` | Summarize and compress the conversation history |
 | `/attach` | Attach a file or image to your message |
 | `/session save <name>` | Save the current session |
 | `/session load <name>` | Restore a saved session (the agent gets the conversation back too) |
-| `/config` | Show current configuration |
+| `/config` | Same as `/settings` |
 | `/config provider ollama\|lmstudio` | Switch provider |
 | `/config model <name>` | Set the active model |
 | `/config url <url>` | Override the server base URL |
 | `/config temperature <0-1>` | Adjust model temperature |
+| `/rules` | Show the project instructions the agent gets |
+| `/tools` | List the tools the agent can use in this mode |
+| `/keys` | Keyboard shortcuts |
 | `/doctor` | Check server connectivity and config |
+| `/version` | Your version, how it was installed and the newest release |
+| `/update` | Install the newest LocalCode, right from the app |
 | `/lsp` | Run diagnostics: tsc, eslint, cargo check, go vet, ruff/pyflakes, rubocop, dotnet build |
+| `/lsp servers` | Which language servers are installed |
+| `/lsp install <name>` | Install one: `typescript`, `pylsp`, `gopls`, `rust-analyzer` |
 | `/lsp hover <file>:<line>:<col>` | Type, signature or docs for a symbol |
 | `/lsp def <file>:<line>:<col>` | Where a symbol is defined |
 | `/trust <path>` | Trust a folder: auto-approve all write ops inside it |
@@ -285,9 +317,18 @@ Before the agent changes a file, LocalCode keeps a copy: `/undo` reverts the las
 </details>
 
 <details>
-<summary><b>Configuration file</b></summary>
+<summary><b>Settings</b></summary>
 
-`~/.localcode/config.json` is created on first start and can be edited directly:
+`/settings` lists everything you can change, grouped, with the current value next to each. `↑` `↓` or the mouse pick a row, `Enter` or a click flips a switch or cycles a choice, `←` `→` step numbers.
+
+| Group | Settings |
+|---|---|
+| Model and server | server, address, model, temperature, answer length, tool calls |
+| Agent | install language servers, dangerous commands, trusted folders, project rules |
+| Interface | animations, mouse, update check |
+| Integrations | Discord status (off until you turn it on) |
+
+Everything is stored in `~/.localcode/config.json`, which you can also edit by hand:
 
 ```json
 {
@@ -298,9 +339,13 @@ Before the agent changes a file, LocalCode keeps a copy: `/undo` reverts the las
     "temperature": 0.1,
     "toolMode": "auto"
   },
+  "ui": { "animations": true, "mouse": true },
+  "discord": { "enabled": false },
   "trustedPaths": ["/home/user/projects/myapp"]
 }
 ```
+
+Turn **mouse** off to give the mouse back to your terminal (its own selection then works as usual). Turn **animations** off for slow connections such as SSH.
 
 </details>
 
@@ -320,17 +365,17 @@ Before the agent changes a file, LocalCode keeps a copy: `/undo` reverts the las
 <details>
 <summary><b>Language servers (LSP)</b></summary>
 
-`/lsp` runs diagnostics with the project's own tools (tsc, eslint, cargo check, go vet, ruff/pyflakes, rubocop, dotnet build). For hover and go-to-definition, both for you (`/lsp hover`, `/lsp def`) and for the agent, install the language server and put it on your `PATH`:
+`/lsp` runs diagnostics with the project's own tools (tsc, eslint, cargo check, go vet, ruff/pyflakes, rubocop, dotnet build). Hover and go-to-definition, both for you (`/lsp hover`, `/lsp def`) and for the agent, use real language servers. **You don't have to install them**: the first time one is needed, LocalCode fetches it with the tool that language already uses.
 
-| Language | Server | Install |
+| Language | Server | Installed with |
 |---|---|---|
-| TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server typescript` |
-| Rust | `rust-analyzer` | [rust-analyzer.github.io](https://rust-analyzer.github.io) |
+| TypeScript / JavaScript | `typescript-language-server` | npm, into `~/.localcode/lsp` (nothing global) |
+| Python | `pylsp` | `pip install --user python-lsp-server` |
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
-| Python | `pylsp` | `pip install python-lsp-server` |
-| C / C++ | `clangd` | [clangd.llvm.org](https://clangd.llvm.org) |
+| Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
+| C / C++ | `clangd` | not automatic: install LLVM ([clangd.llvm.org](https://clangd.llvm.org)) |
 
-Servers start on the first request and keep running in the background.
+`/lsp servers` shows what is installed, `/lsp install <name>` installs one ahead of time, and `/settings` turns the automatic install off. Servers start on the first request and keep running in the background.
 
 </details>
 
@@ -352,6 +397,8 @@ If the model server fails, LocalCode retries up to 3 times. If a tool fails, the
 
 **"Model not found"**: `/models` lists what's loaded, `/model` switches.
 
+**Copying text doesn't work**: drag over it with the mouse; it is copied when you let go. If your terminal ignores that, turn **mouse** off in `/settings` and select the way you always do.
+
 **The agent stops early, or nothing happens after `ctrl+c`**: update to 0.8 or later. Earlier versions left the stopped request running in the model server, so the next one had to wait. With small models, split big jobs into steps ("create only index.html first").
 
 **The screen looks garbled**: use a UTF-8 terminal with 256 colors, e.g. Windows Terminal on Windows, or iTerm2, Ghostty, Alacritty or kitty.
@@ -361,7 +408,7 @@ If the model server fails, LocalCode retries up to 3 times. If a tool fails, the
 <details>
 <summary><b>Discord status</b></summary>
 
-If Discord is running, LocalCode shows what it's doing there ("Thinking…", "Running agent") with the folder name. No setup needed.
+LocalCode can show what it's doing in your Discord profile ("Thinking…", "Running agent") with the folder name. It is off by default; turn on **discord status** in `/settings`.
 
 </details>
 

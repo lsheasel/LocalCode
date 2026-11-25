@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" role="img" aria-label="LocalCode">
+  <!-- The "l" of the LocalCode start screen (╷ │ │ └), drawn with a longer foot so it reads as an L. -->
+  <rect width="1200" height="1200" fill="#0D1015"/>
+  <g fill="#ECEDEF">
+    <rect x="370" y="150" width="64" height="900"/>
+    <rect x="370" y="986" width="460" height="64"/>
+  </g>
+</svg>

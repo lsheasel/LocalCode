@@ -22,17 +22,28 @@ export class LspClient extends EventEmitter {
     private readonly spawnArgs: string[],
     private readonly workDir: string,
     name: string,
+    private readonly initOptions: Record<string, unknown> = {},
   ) {
     super()
     this.serverName = name
   }
 
   async start(): Promise<void> {
-    this.proc = spawn(this.command, this.spawnArgs, {
+    // On Windows, .cmd launchers (npm installs) only start through a shell,
+    // and a path with spaces must then be quoted. Real .exe files don't need it.
+    const shell = process.platform === 'win32' && !/\.exe$/i.test(this.command)
+    const command = shell && /\s/.test(this.command) ? `"${this.command}"` : this.command
+    this.proc = spawn(command, this.spawnArgs, {
       cwd: this.workDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
+      shell,
+      windowsHide: true,
     })
+    // A missing program must fail start(), not crash the app.
+    const spawnFailed = new Promise<never>((_, reject) => {
+      this.proc!.once('error', (err) => reject(err))
+    })
+    spawnFailed.catch(() => undefined)
 
     this.proc.stdout!.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString('utf8')
@@ -46,7 +57,7 @@ export class LspClient extends EventEmitter {
       this.pending.clear()
     })
 
-    await this.request('initialize', {
+    await Promise.race([spawnFailed, this.request('initialize', {
       processId: process.pid,
       rootUri: pathToFileURL(this.workDir).toString(),
       capabilities: {
@@ -56,8 +67,8 @@ export class LspClient extends EventEmitter {
           publishDiagnostics: {},
         },
       },
-      initializationOptions: {},
-    })
+      initializationOptions: this.initOptions,
+    })])
     this.notify('initialized', {})
     this._initialized = true
   }

@@ -5,6 +5,7 @@ import { AgentMessage } from '../shared/types'
 import { theme, modeColors, Mode, THREAD_BORDER } from '../shared/theme'
 import { truncEnd, truncStart, wrapText, formatTokens } from '../shared/utils'
 import { getAppVersion } from '../shared/version'
+import { useTween } from '../shared/anim'
 
 /** Files the agent changed this session, with lines added / removed. */
 export function modifiedFiles(messages: AgentMessage[]): Array<{ path: string; added: number; removed: number }> {
@@ -42,15 +43,24 @@ const Leader: React.FC<{ label: string; value: string; width: number; valueColor
   )
 }
 
-/** "▰▰▰▱▱▱▱▱▱▱  31%" — how full the context window is. */
+const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉']
+
+/**
+ * "██████▍─────────  31%": how full the context window is. The bar is drawn
+ * in eighths of a cell and grows smoothly when a request adds to it.
+ */
 const ContextBar: React.FC<{ share: number; width: number; color: string }> = ({ share, width, color }) => {
+  const shown = useTween(share, 600)
   const pct = `${Math.round(share * 100)}%`
   const cells = Math.max(4, width - pct.length - 2)
-  const filled = Math.round(share * cells)
+  const eighths = Math.round(Math.min(1, shown) * cells * 8)
+  const full = Math.floor(eighths / 8)
+  const part = EIGHTHS[eighths % 8]
+  const rest = cells - full - (part ? 1 : 0)
   return (
     <Text>
-      <Text color={color === theme.textMuted ? theme.primary : color}>{'▰'.repeat(filled)}</Text>
-      <Text color={theme.textGhost}>{'▱'.repeat(cells - filled)}</Text>
+      <Text color={color === theme.textMuted ? theme.primary : color}>{'█'.repeat(full)}{part}</Text>
+      <Text color={theme.textGhost}>{'─'.repeat(Math.max(0, rest))}</Text>
       <Text color={theme.textFaint}>  {pct}</Text>
     </Text>
   )

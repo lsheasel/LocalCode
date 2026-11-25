@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import { Fieldset } from './Fieldset'
+import { ListRow } from './ListRow'
 import { theme, ICON, modeColors, Mode } from '../shared/theme'
 import { truncEnd } from '../shared/utils'
 
@@ -84,11 +85,10 @@ export const ModelPicker: React.FC<Props> = ({ width: widthProp, models, loading
           const isSel = top + i === sel
           const current = m === currentModel
           return (
-            <Text key={m} wrap="truncate-end">
-              <Text color={isSel ? theme.primary : theme.textGhost}>{isSel ? ICON.selected : ICON.unselected}</Text>
+            <ListRow key={m} selected={isSel} onHover={() => setSelectedIdx(top + i)} onClick={() => onSelect(m)}>
               <Text color={isSel ? theme.textBright : theme.textMuted} bold={isSel}>{truncEnd(m, width - 16)}</Text>
               {current && <Text color={theme.primary}>  {ICON.ok} in use</Text>}
-            </Text>
+            </ListRow>
           )
         })
       )}

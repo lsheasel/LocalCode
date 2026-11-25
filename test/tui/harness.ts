@@ -45,15 +45,23 @@ export class Session {
   readonly term: InstanceType<typeof Terminal>
   private proc: IPty
   exited = false
+  /** What the app put on the clipboard (OSC 52). */
+  clipboard = ''
 
   constructor({ cols = 100, rows = 30, cwd = ROOT, home = makeHome(), args = [] as string[] } = {}) {
     this.term = new Terminal({ cols, rows, allowProposedApi: true })
+    this.term.parser.registerOscHandler(52, (data) => {
+      const b64 = data.split(';')[1] ?? ''
+      this.clipboard = Buffer.from(b64, 'base64').toString('utf8')
+      return true
+    })
     this.proc = spawn(process.execPath, [ENTRY, ...args], {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: { ...process.env, USERPROFILE: home, HOME: home, FORCE_COLOR: '3', CI: '' },
+      // Never touch the real clipboard from a test.
+      env: { ...process.env, USERPROFILE: home, HOME: home, FORCE_COLOR: '3', CI: '', LOCALCODE_NO_NATIVE_CLIPBOARD: '1' },
     })
     this.proc.onData((d) => this.term.write(d))
     this.proc.onExit(() => {
@@ -74,6 +82,35 @@ export class Session {
 
   key(seq: string) {
     this.proc.write(seq)
+  }
+
+  // ── Mouse (SGR reports, cells 0-based) ──
+  move(x: number, y: number) {
+    this.proc.write(`[<35;${x + 1};${y + 1}M`)
+  }
+
+  async click(x: number, y: number) {
+    this.proc.write(`[<0;${x + 1};${y + 1}M`)
+    await this.wait(30)
+    this.proc.write(`[<0;${x + 1};${y + 1}m`)
+  }
+
+  async drag(from: { x: number; y: number }, to: { x: number; y: number }) {
+    this.proc.write(`[<0;${from.x + 1};${from.y + 1}M`)
+    await this.wait(30)
+    this.proc.write(`[<32;${to.x + 1};${to.y + 1}M`)
+    await this.wait(60)
+    this.proc.write(`[<0;${to.x + 1};${to.y + 1}m`)
+  }
+
+  /** Where `text` is on screen (its last occurrence), or null. */
+  async find(text: string): Promise<{ x: number; y: number } | null> {
+    const rows = await this.screen()
+    for (let y = rows.length - 1; y >= 0; y--) {
+      const x = rows[y].indexOf(text)
+      if (x !== -1) return { x, y }
+    }
+    return null
   }
 
   resize(cols: number, rows: number) {

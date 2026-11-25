@@ -39,7 +39,7 @@ export async function lspHoverTool(filePath: string, line: number, col: number, 
       return {
         success: false,
         output: '',
-        error: 'No LSP server available for this file type, or no hover info at this position.\nMake sure typescript-language-server / rust-analyzer / gopls / pylsp is installed.',
+        error: LspManager.getInstance().lastProblem || 'No hover info at this position.',
       }
     }
     return { success: true, output: `[${result.server}]\n${result.text}` }
@@ -55,7 +55,7 @@ export async function lspDefinitionTool(filePath: string, line: number, col: num
       return {
         success: false,
         output: '',
-        error: 'No LSP server available for this file type, or no definition found at this position.',
+        error: LspManager.getInstance().lastProblem || 'No definition found at this position.',
       }
     }
     return {

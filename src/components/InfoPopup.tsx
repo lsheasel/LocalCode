@@ -19,6 +19,17 @@ function renderLine(line: string, i: number, termCols: number): React.ReactEleme
   const maxW = termCols - 8
   if (!line.trim()) return <Text key={i}> </Text>
 
+  // Unified diff lines (/diff): added, removed, hunk and file headers.
+  if (/^diff --git /.test(line)) {
+    return <Text key={i} color={theme.textBright} bold wrap="truncate-end">{line.slice(11)}</Text>
+  }
+  if (/^(\+\+\+|---|index |new file|deleted file)/.test(line)) {
+    return <Text key={i} color={theme.textFaint} wrap="truncate-end">{line.slice(0, maxW)}</Text>
+  }
+  if (/^@@/.test(line)) return <Text key={i} color={theme.primary} wrap="truncate-end">{line.slice(0, maxW)}</Text>
+  if (/^\+/.test(line)) return <Text key={i} color={theme.diffAddFg} wrap="truncate-end">{line.slice(0, maxW)}</Text>
+  if (/^-/.test(line)) return <Text key={i} color={theme.diffDelFg} wrap="truncate-end">{line.slice(0, maxW)}</Text>
+
   if (/^\*\*.+\*\*$/.test(line.trim())) {
     return <Text key={i} color={theme.textBright} bold wrap="truncate-end">{line.replace(/\*\*/g, '')}</Text>
   }

@@ -94,6 +94,22 @@ export interface AppConfig {
   trustedPaths: string[]   // paths where write ops are auto-approved (+ all subpaths)
   disabledPlugins: string[]
   debugMode?: boolean
+  /** Terminal UI. Unset means on. */
+  ui?: {
+    /** Hover fades, glows, the shimmer while thinking, smooth scrolling. */
+    animations?: boolean
+    /** Mouse: hover, clicks and drag-to-copy. Off leaves the mouse to the terminal. */
+    mouse?: boolean
+  }
+  /** Discord status ("Rich Presence"). Off unless turned on. */
+  discord?: { enabled?: boolean }
+  /** Look for a new version at start. Unset means on. */
+  updates?: { check?: boolean }
+  /** Language servers for lsp_hover / lsp_definition. */
+  lsp?: {
+    /** Install a missing language server on first use. Unset means on. */
+    autoInstall?: boolean
+  }
   security: {
     allowDangerousCommands: boolean
     requireConfirmation: string[]

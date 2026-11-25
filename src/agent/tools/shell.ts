@@ -96,3 +96,39 @@ export function runShell(
     })
   })
 }
+
+/**
+ * Run one program with arguments (no shell syntax, so the same call works in
+ * PowerShell, cmd and bash). `.cmd` launchers like npm need a shell on
+ * Windows, which is used there.
+ */
+export function runProgram(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  onOutput?: (chunk: string) => void,
+  timeoutMs = 10 * 60_000,
+): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    let output = ''
+    const take = (d: Buffer) => {
+      const text = d.toString('utf8')
+      output = (output + text).slice(-20000)
+      onOutput?.(text)
+    }
+    try {
+      const child = spawn(cmd, args, {
+        cwd: shellPath(cwd),
+        shell: process.platform === 'win32',
+        windowsHide: true,
+        timeout: timeoutMs,
+      })
+      child.stdout?.on('data', take)
+      child.stderr?.on('data', take)
+      child.on('error', (err) => resolve({ ok: false, output: output + err.message }))
+      child.on('close', (code) => resolve({ ok: code === 0, output }))
+    } catch (err) {
+      resolve({ ok: false, output: String(err) })
+    }
+  })
+}

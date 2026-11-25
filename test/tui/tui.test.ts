@@ -3,9 +3,9 @@
 // needed: everything here works without one.
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { Session, KEY, ROOT } from './harness'
+import { Session, KEY, ROOT, makeHome } from './harness'
 
 const sessions: Session[] = []
 const start = async (opts: ConstructorParameters<typeof Session>[0] = {}) => {
@@ -77,7 +77,7 @@ describe.skipIf(!existsSync(join(ROOT, 'dist', 'localcode.js')))('tui', () => {
   it('opens the palette and runs a command from it', async () => {
     const s = await start()
     s.key(KEY.ctrlP)
-    await s.until((t) => /palette/.test(t))
+    await s.until((t) => /Search commands/.test(t))
     await s.type('help')
     s.key(KEY.enter)
     await s.until((t) => /Attachments/.test(t))
@@ -92,6 +92,61 @@ describe.skipIf(!existsSync(join(ROOT, 'dist', 'localcode.js')))('tui', () => {
     s.key(KEY.up)
     await s.until((t) => /▍ \$ echo hello-from-shell/.test(t))
   }, 30000)
+
+  it('runs a command from the / menu with a click', async () => {
+    const s = await start()
+    await s.type('/doc')
+    await s.until((t) => /\/doctor/.test(t) && /commands/.test(t))
+    const at = (await s.find('/doctor   Check'))!
+    s.move(at.x, at.y)
+    await s.click(at.x, at.y)
+    await s.until((t) => /Node\.js/.test(t) && /Not reachable/.test(t))
+  }, 20000)
+
+  it('opens /settings and flips a switch with the mouse', async () => {
+    const home = makeHome()
+    const s = await start({ home })
+    await s.type('/settings')
+    s.key(KEY.enter)
+    await s.until((t) => /settings/.test(t) && /discord status/.test(t))
+    const row = (await s.find('discord status'))!
+    await s.click(row.x, row.y)
+    await s.until((t) => /discord status\s+━+● on/.test(t))
+    const cfg = JSON.parse(readFileSync(join(home, '.localcode', 'config.json'), 'utf8'))
+    expect(cfg.discord?.enabled).toBe(true)
+    s.key(KEY.esc)
+    await s.until((t) => /Ask anything/.test(t))
+  }, 20000)
+
+  it('copies text selected with a drag', async () => {
+    const s = await start()
+    await s.type('$ echo copy-me-please')
+    s.key(KEY.enter)
+    await s.until((t) => /├─ run/.test(t) && /copy-me-please/.test(t.split('├─ run')[1] ?? ''), 15000)
+    const at = (await s.find('copy-me-please'))!
+    await s.drag(at, { x: at.x + 'copy-me-please'.length - 1, y: at.y })
+    await s.until((t) => /copied/.test(t))
+    expect(s.clipboard).toBe('copy-me-please')
+  }, 25000)
+
+  it('opens the full output of a step when its row is clicked', async () => {
+    const s = await start()
+    await s.type('$ echo step-output')
+    s.key(KEY.enter)
+    await s.until((t) => /├─ run/.test(t), 15000)
+    const row = (await s.find('├─ run'))!
+    s.move(row.x + 4, row.y)
+    await s.until((t) => /open output/.test(t))
+    await s.click(row.x + 4, row.y)
+    await s.until((t) => /esc close/.test(t) && /step-output/.test(t))
+  }, 25000)
+
+  it('switches mode with /mode', async () => {
+    const s = await start()
+    await s.type('/mode plan')
+    s.key(KEY.enter)
+    await s.until((t) => /┌─ plan/.test(t))
+  }, 20000)
 
   it('quits on ctrl+c', async () => {
     const s = await start()
